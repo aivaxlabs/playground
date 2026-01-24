@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chat Playground</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet">
+</head>
+
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          Chat Playground
+        </h1>
+        <button class="btn btn-icon" id="theme-toggle-btn" title="Toggle theme">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            id="theme-icon">
+            <circle cx="12" cy="12" r="5" />
+            <line x1="12" y1="1" x2="12" y2="3" />
+            <line x1="12" y1="21" x2="12" y2="23" />
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+            <line x1="1" y1="12" x2="3" y2="12" />
+            <line x1="21" y1="12" x2="23" y2="12" />
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+          </svg>
+        </button>
+      </div>
+      <div class="sidebar-content">
+        <div class="section" id="model-config">
+          <div class="section-title">Model Configuration</div>
+          <div class="form-group">
+            <label for="model-name">Model Name</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="model-name" placeholder="@google/gemini-2.0-flash" />
+              <button class="btn btn-secondary btn-icon" style="height: 28px;" id="list-models-btn" title="List Models">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="endpoint">Endpoint URL</label>
+            <input type="text" id="endpoint" placeholder="https://api.openai.com/v1/chat/completions" />
+          </div>
+          <div class="form-group">
+            <label for="api-key">API Key</label>
+            <input type="password" id="api-key" placeholder="sk-..." />
+          </div>
+        </div>
+
+        <div class="section" id="inference-config">
+          <div class="section-title">Inference Settings</div>
+          <div class="form-group">
+            <label for="system-prompt">System Prompt</label>
+            <textarea id="system-prompt" placeholder="Describe desired model behavior..."></textarea>
+          </div>
+          <div class="form-group">
+            <label>Temperature</label>
+            <div class="checkbox-group" style="margin-bottom: 8px;">
+              <input type="checkbox" id="temp-enabled" checked />
+              <label for="temp-enabled" style="margin-bottom: 0;">Enable temperature</label>
+            </div>
+            <div class="range-group">
+              <input type="range" id="temperature" min="0" max="2" step="0.1" value="1" />
+              <span class="range-value" id="temp-value">1.0</span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="max-tokens">Max Completion Tokens</label>
+            <input type="number" id="max-tokens" placeholder="Leave empty for default" min="1" />
+          </div>
+          <div class="form-group">
+            <label for="reasoning-effort">Reasoning Effort</label>
+            <select id="reasoning-effort">
+              <option value="null">Null</option>
+              <option value="none">None</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra High</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="tools">Tools (JSON)</label>
+            <textarea id="tools" class="json-editor" placeholder='[{"type": "function", "function": {...}}]'></textarea>
+          </div>
+        </div>
+
+        <div class="section">
+          <button class="btn btn-secondary" id="clear-chat" style="width: 100%;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+            Clear Chat
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="status-bar">
+        <div class="status-indicator">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">Ready</span>
+        </div>
+        <span id="model-display">No model configured</span>
+      </div>
+
+      <div class="tabs-bar">
+        <div class="tabs-container" id="tabs-container"></div>
+        <button class="btn btn-icon tab-add-btn" id="add-tab-btn" title="New chat">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="chat-container">
+        <div class="messages" id="messages">
+          <div class="empty-state" id="empty-state">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            <p>Your conversation will appear here</p>
+          </div>
+        </div>
+
+        <div class="input-area">
+          <div class="input-container">
+            <div class="input-attachments" id="input-attachments"></div>
+            <div class="input-row">
+              <textarea id="user-input" placeholder="Chat with your prompt..." rows="1"></textarea>
+              <div class="input-actions">
+                <button class="btn btn-icon" id="attach-btn" title="Attach file">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path
+                      d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
+                <button class="btn btn-primary" id="send-btn">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+                  </svg>
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <input type="file" id="file-input" multiple accept="image/*,audio/*,.pdf,.txt,.md,.json" style="display: none;" />
+
+  <div class="modal-overlay" id="tool-modal" style="display: none;">
+    <div class="modal">
+      <div class="modal-title">Provide Tool Response</div>
+      <div class="form-group">
+        <label id="tool-modal-name">Function: </label>
+      </div>
+      <div class="form-group">
+        <label for="tool-response">Response (JSON or text)</label>
+        <textarea id="tool-response" class="json-editor" rows="8"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="tool-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="tool-modal-submit">Submit</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="edit-modal" style="display: none;">
+    <div class="modal">
+      <div class="modal-title">Edit Message</div>
+      <div class="form-group">
+        <label for="edit-content">Content</label>
+        <textarea id="edit-content" rows="6"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="edit-modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="edit-modal-submit">Save & Regenerate</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="models-modal" style="display: none;">
+    <div class="modal" style="max-height: 80vh;">
+      <div class="modal-title">Select Model</div>
+      <div class="models-list" id="models-list">
+        <div class="loading-indicator">Loading models...</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="models-modal-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>
