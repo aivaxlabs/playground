@@ -40,6 +40,8 @@ export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
   cachedTokens?: number;
+  responseTimeMs?: number;
+  tokensPerSecond?: number;
 }
 
 export interface ToolCall {

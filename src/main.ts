@@ -1,4 +1,5 @@
 import './styles/main.css';
+import './styles/markdown-body.css';
 import type { ChatMessage, FileAttachment, ToolCall, ModelConfig, InferenceConfig, Chat, TokenUsage } from './types';
 import { saveModelConfig, getDefaultModelConfig, saveInferenceConfig, getDefaultInferenceConfig, saveChat, getAllChats, deleteChat } from './storage/db';
 import { buildRequest, streamChat } from './api/chat-client';
@@ -485,7 +486,7 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
     </div>
     ${reasoningHtml}
     ${contentHtml}
-    ${msg.usage ? `<div class="token-usage"><span>${msg.usage.promptTokens} in</span><span>${msg.usage.completionTokens} out</span>${msg.usage.cachedTokens ? `<span>${msg.usage.cachedTokens} cached</span>` : ''}</div>` : ''}
+    ${msg.usage ? `<div class="token-usage"><span><i class="ri-arrow-down-line"></i>${msg.usage.promptTokens} in</span><span><i class="ri-arrow-up-line"></i>${msg.usage.completionTokens} out</span>${msg.usage.cachedTokens ? `<span><i class="ri-database-2-line"></i>${msg.usage.cachedTokens} cached</span>` : ''}${msg.usage.tokensPerSecond ? `<span><i class="ri-speed-line"></i>${msg.usage.tokensPerSecond.toFixed(1)} tok/s</span>` : ''}${msg.usage.responseTimeMs ? `<span><i class="ri-timer-line"></i>${(msg.usage.responseTimeMs / 1000).toFixed(2)}s</span>` : ''}</div>` : ''}
   `;
 
   const editBtn = div.querySelector('.edit-btn');
@@ -799,6 +800,7 @@ async function sendToApi() {
     let fullContent = '';
     let fullReasoning = '';
     const toolCalls: Map<number, { id: string; type: string; name: string; arguments: string }> = new Map();
+    const startTime = performance.now();
 
     for await (const event of streamChat(modelConfig, request)) {
       const choice = event.choices[0];
@@ -813,10 +815,25 @@ async function sendToApi() {
 
       if (choice.delta.content) {
         fullContent += choice.delta.content;
+
+        // Remove typing indicator if it exists
+        const typingIndicator = msgEl?.querySelector('.typing-indicator');
+        if (typingIndicator) {
+          typingIndicator.remove();
+        }
+
         if (contentEl) {
-          contentEl.textContent = fullContent;
+          if (!contentEl.classList.contains('markdown-body')) {
+            contentEl.classList.add('markdown-body');
+          }
+          // Parse markdown incrementally
+          contentEl.innerHTML = await marked.parse(fullContent);
         }
         chat.messages[msgIndex].content = fullContent;
+        // Scroll adjustment: check if user was at bottom before update to keep autoscroll
+        // simple version: just scroll
+        // messagesContainer.scrollTop = messagesContainer.scrollHeight; 
+        // Keeping original scroll behavior
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
       }
 
@@ -839,10 +856,14 @@ async function sendToApi() {
       }
 
       if (event.usage) {
+        const responseTimeMs = performance.now() - startTime;
+        const tokensPerSecond = event.usage.completion_tokens / (responseTimeMs / 1000);
         const usage: TokenUsage = {
           promptTokens: event.usage.prompt_tokens,
           completionTokens: event.usage.completion_tokens,
-          cachedTokens: event.usage.prompt_tokens_details?.cached_tokens
+          cachedTokens: event.usage.prompt_tokens_details?.cached_tokens,
+          responseTimeMs,
+          tokensPerSecond
         };
         chat.messages[msgIndex].usage = usage;
       }
