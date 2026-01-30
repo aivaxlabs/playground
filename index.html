@@ -40,69 +40,126 @@
         </button>
       </div>
       <div class="sidebar-content">
-        <div class="section" id="model-config">
-          <div class="section-title">Model Configuration</div>
-          <div class="form-group">
-            <label for="model-name">Model Name</label>
-            <div style="display: flex; gap: 8px;">
-              <input type="text" id="model-name" placeholder="@google/gemini-2.0-flash" />
-              <button class="btn btn-secondary btn-icon" style="height: 28px;" id="list-models-btn" title="List Models">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
-                </svg>
-              </button>
+        <details class="section-accordion" id="model-config" open>
+          <summary class="section-title"><i class="ri-settings-3-line"></i> Model Configuration</summary>
+          <div class="section-content">
+            <div class="form-group">
+              <label for="model-name">Model Name</label>
+              <div style="display: flex; gap: 8px;">
+                <input type="text" id="model-name" placeholder="@google/gemini-2.0-flash" />
+                <button class="btn btn-secondary btn-icon" style="height: 28px;" id="list-models-btn" title="List Models">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+                  </svg>
+                </button>
+              </div>
             </div>
+            <div class="form-group">
+              <label for="endpoint">Endpoint URL</label>
+              <input type="text" id="endpoint" placeholder="https://api.openai.com/v1/chat/completions" />
+            </div>
+            <div class="form-group">
+              <label for="api-key">API Key</label>
+              <input type="password" id="api-key" placeholder="sk-..." />
+            </div>
+            <button class="btn btn-secondary" id="providers-btn" style="width: 100%;">
+              <i class="ri-database-2-line"></i>
+              Manage Providers
+            </button>
           </div>
-          <div class="form-group">
-            <label for="endpoint">Endpoint URL</label>
-            <input type="text" id="endpoint" placeholder="https://api.openai.com/v1/chat/completions" />
-          </div>
-          <div class="form-group">
-            <label for="api-key">API Key</label>
-            <input type="password" id="api-key" placeholder="sk-..." />
-          </div>
-        </div>
+        </details>
 
-        <div class="section" id="inference-config">
-          <div class="section-title">Inference Settings</div>
-          <div class="form-group">
-            <label for="system-prompt">System Prompt</label>
-            <textarea id="system-prompt" placeholder="Describe desired model behavior..."></textarea>
-          </div>
-          <div class="form-group">
-            <label>Temperature</label>
-            <div class="checkbox-group" style="margin-bottom: 8px;">
-              <input type="checkbox" id="temp-enabled" checked />
-              <label for="temp-enabled" style="margin-bottom: 0;">Enable temperature</label>
-            </div>
-            <div class="range-group">
-              <input type="range" id="temperature" min="0" max="2" step="0.1" value="1" />
-              <span class="range-value" id="temp-value">1.0</span>
+        <details class="section-accordion" id="inference-config" open>
+          <summary class="section-title"><i class="ri-message-3-line"></i> System Prompt</summary>
+          <div class="section-content">
+            <div class="form-group" style="margin-bottom: 0;">
+              <textarea id="system-prompt" placeholder="Describe desired model behavior..."></textarea>
             </div>
           </div>
-          <div class="form-group">
-            <label for="max-tokens">Max Completion Tokens</label>
-            <input type="number" id="max-tokens" placeholder="Leave empty for default" min="1" />
+        </details>
+
+        <details class="section-accordion">
+          <summary class="section-title"><i class="ri-equalizer-line"></i> Sampling</summary>
+          <div class="section-content">
+            <div class="form-group">
+              <div class="param-row">
+                <label>Temperature</label>
+                <div class="checkbox-inline">
+                  <input type="checkbox" id="temp-enabled" checked />
+                </div>
+              </div>
+              <div class="range-group">
+                <input type="range" id="temperature" min="0" max="2" step="0.1" value="1" />
+                <span class="range-value" id="temp-value">1.0</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="top-k">Top K <span class="hint-text">(0 = off)</span></label>
+              <div class="range-group">
+                <input type="range" id="top-k" min="0" max="100" step="1" value="0" />
+                <span class="range-value" id="top-k-value">0</span>
+              </div>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="top-p">Top P <span class="hint-text">(0 = off)</span></label>
+              <div class="range-group">
+                <input type="range" id="top-p" min="0" max="1" step="0.01" value="0" />
+                <span class="range-value" id="top-p-value">0.00</span>
+              </div>
+            </div>
           </div>
-          <div class="form-group">
-            <label for="reasoning-effort">Reasoning Effort</label>
-            <select id="reasoning-effort">
-              <option value="null">Null</option>
-              <option value="none">None</option>
-              <option value="minimal">Minimal</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="xhigh">Extra High</option>
-            </select>
+        </details>
+
+        <details class="section-accordion">
+          <summary class="section-title"><i class="ri-sparkling-line"></i> Generation</summary>
+          <div class="section-content">
+            <div class="form-group">
+              <label for="max-tokens">Max Tokens</label>
+              <input type="number" id="max-tokens" placeholder="Default" min="1" />
+            </div>
+            <div class="form-group">
+              <label for="reasoning-effort">Reasoning Effort</label>
+              <select id="reasoning-effort">
+                <option value="null">Default</option>
+                <option value="none">None</option>
+                <option value="minimal">Minimal</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra High</option>
+              </select>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+              <label for="stop-sequences">Stop Sequences <span class="hint-text">(one per line)</span></label>
+              <textarea id="stop-sequences" rows="2" placeholder="###&#10;[END]"></textarea>
+            </div>
           </div>
-          <div class="form-group">
-            <label for="tools">Tools (JSON)</label>
-            <textarea id="tools" class="json-editor" placeholder='[{"type": "function", "function": {...}}]'></textarea>
+        </details>
+
+        <details class="section-accordion">
+          <summary class="section-title"><i class="ri-tools-line"></i> Tools</summary>
+          <div class="section-content">
+            <div class="form-group" style="margin-bottom: 0;">
+              <textarea id="tools" class="json-editor" placeholder='[{"type": "function", "function": {...}}]'></textarea>
+              <div class="hint-buttons">
+                <button type="button" class="hint-btn" data-tool="weather" title="Weather tool example">Weather</button>
+                <button type="button" class="hint-btn" data-tool="calculator" title="Calculator tool example">Calculator</button>
+                <button type="button" class="hint-btn" data-tool="websearch" title="Web search tool example">Web Search</button>
+              </div>
+            </div>
           </div>
-        </div>
+        </details>
 
         <div class="section">
+          <button class="btn btn-secondary" id="reset-params-btn" style="width: 100%; margin-bottom: 8px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+              <path d="M3 21v-5h5" />
+            </svg>
+            Reset Parameters
+          </button>
           <button class="btn btn-secondary" id="clear-chat" style="width: 100%;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
@@ -159,6 +216,12 @@
                   </svg>
                   Send
                 </button>
+                <button class="btn btn-danger" id="stop-btn" style="display: none;">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="6" y="6" width="12" height="12" />
+                  </svg>
+                  Stop
+                </button>
               </div>
             </div>
           </div>
@@ -208,6 +271,49 @@
       </div>
       <div class="modal-actions">
         <button class="btn btn-secondary" id="models-modal-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="providers-modal" style="display: none;">
+    <div class="modal" style="max-height: 80vh; width: 500px;">
+      <div class="modal-title">Manage Providers</div>
+      <div class="providers-list" id="providers-list"></div>
+      <div class="provider-form" id="provider-form">
+        <div class="form-group">
+          <label for="provider-name">Provider Name</label>
+          <input type="text" id="provider-name" placeholder="My OpenAI Provider" />
+        </div>
+        <div class="form-group">
+          <label for="provider-endpoint">Endpoint URL</label>
+          <input type="text" id="provider-endpoint" placeholder="https://api.openai.com/v1/chat/completions" />
+          <div class="hint-buttons">
+            <button type="button" class="hint-btn" data-endpoint="https://api.openai.com/v1/chat/completions" data-target="provider-endpoint" title="OpenAI">OpenAI</button>
+            <button type="button" class="hint-btn" data-endpoint="https://generativelanguage.googleapis.com/v1beta/models" data-target="provider-endpoint" title="Google">Google</button>
+            <button type="button" class="hint-btn" data-endpoint="https://api.anthropic.com/v1/messages" data-target="provider-endpoint" title="Anthropic">Anthropic</button>
+            <button type="button" class="hint-btn" data-endpoint="https://openrouter.ai/api/v1/chat/completions" data-target="provider-endpoint" title="OpenRouter">OpenRouter</button>
+            <button type="button" class="hint-btn" data-endpoint="https://api-inference.huggingface.co/models" data-target="provider-endpoint" title="HuggingFace">HuggingFace</button>
+            <button type="button" class="hint-btn" data-endpoint="https://api.groq.com/openai/v1/chat/completions" data-target="provider-endpoint" title="Groq">Groq</button>
+            <button type="button" class="hint-btn" data-endpoint="https://api.cerebras.ai/v1/chat/completions" data-target="provider-endpoint" title="Cerebras">Cerebras</button>
+            <button type="button" class="hint-btn" data-endpoint="https://api.studio.nebius.ai/v1/chat/completions" data-target="provider-endpoint" title="Nebius">Nebius</button>
+            <button type="button" class="hint-btn" data-endpoint="https://inference.aivax.net/v1/chat/completions" data-target="provider-endpoint" title="AIVAX">AIVAX</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="provider-model">Model Name</label>
+          <input type="text" id="provider-model" placeholder="gpt-4o" />
+        </div>
+        <div class="form-group">
+          <label for="provider-apikey">API Key</label>
+          <input type="password" id="provider-apikey" placeholder="sk-..." />
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="providers-modal-cancel">Close</button>
+        <button class="btn btn-primary" id="provider-save-btn">
+          <i class="ri-add-line"></i>
+          Add Provider
+        </button>
       </div>
     </div>
   </div>

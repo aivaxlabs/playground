@@ -10,6 +10,9 @@ export interface ChatRequest {
     }[];
     stream: boolean;
     temperature?: number;
+    top_k?: number;
+    top_p?: number;
+    stop?: string[];
     max_completion_tokens?: number;
     tools?: object[];
     reasoning_effort?: string;
@@ -77,6 +80,18 @@ export function buildRequest(
         request.temperature = inferenceConfig.temperature;
     }
 
+    if (inferenceConfig.top_k !== null && inferenceConfig.top_k > 0) {
+        request.top_k = inferenceConfig.top_k;
+    }
+
+    if (inferenceConfig.top_p !== null && inferenceConfig.top_p > 0) {
+        request.top_p = inferenceConfig.top_p;
+    }
+
+    if (inferenceConfig.stop.length > 0) {
+        request.stop = inferenceConfig.stop;
+    }
+
     if (inferenceConfig.tools.trim()) {
         try {
             request.tools = JSON.parse(inferenceConfig.tools);
@@ -96,7 +111,8 @@ export function buildRequest(
 
 export async function* streamChat(
     modelConfig: ModelConfig,
-    request: ChatRequest
+    request: ChatRequest,
+    signal?: AbortSignal
 ): AsyncGenerator<StreamEvent> {
     const response = await fetch(modelConfig.endpoint, {
         method: 'POST',
@@ -104,7 +120,8 @@ export async function* streamChat(
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${modelConfig.apiKey}`
         },
-        body: JSON.stringify(request)
+        body: JSON.stringify(request),
+        signal
     });
 
     if (!response.ok) {

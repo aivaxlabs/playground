@@ -1,7 +1,7 @@
 import './styles/main.css';
 import './styles/markdown-body.css';
-import type { ChatMessage, FileAttachment, ToolCall, ModelConfig, InferenceConfig, Chat, TokenUsage } from './types';
-import { saveModelConfig, getDefaultModelConfig, saveInferenceConfig, getDefaultInferenceConfig, saveChat, getAllChats, deleteChat } from './storage/db';
+import type { ChatMessage, MessageSegment, FileAttachment, ToolCall, ModelConfig, InferenceConfig, Chat, TokenUsage, Provider } from './types';
+import { saveModelConfig, getDefaultModelConfig, saveInferenceConfig, getDefaultInferenceConfig, saveChat, getAllChats, deleteChat, saveProvider, getAllProviders, deleteProvider } from './storage/db';
 import { buildRequest, streamChat } from './api/chat-client';
 import { listModels, type Model } from './api/models-client';
 import { marked } from 'marked';
@@ -22,6 +22,9 @@ let inferenceConfig: InferenceConfig = {
   systemPrompt: '',
   temperature: 1,
   temperatureEnabled: true,
+  top_k: null,
+  top_p: null,
+  stop: [],
   maxCompletionTokens: null,
   tools: '',
   reasoningEffort: 'null'
@@ -29,11 +32,14 @@ let inferenceConfig: InferenceConfig = {
 
 let chats: Chat[] = [];
 let currentChatId: string | null = null;
+let providers: Provider[] = [];
+let editingProviderId: string | null = null;
 
 let pendingAttachments: FileAttachment[] = [];
 let isStreaming = false;
 let editingMessageIndex: number | null = null;
 let pendingToolCall: { messageIndex: number; toolCall: ToolCall } | null = null;
+let abortController: AbortController | null = null;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -44,15 +50,22 @@ const systemPromptInput = $<HTMLTextAreaElement>('system-prompt');
 const tempEnabledInput = $<HTMLInputElement>('temp-enabled');
 const temperatureInput = $<HTMLInputElement>('temperature');
 const tempValueSpan = $<HTMLSpanElement>('temp-value');
+const topKInput = $<HTMLInputElement>('top-k');
+const topKValueSpan = $<HTMLSpanElement>('top-k-value');
+const topPInput = $<HTMLInputElement>('top-p');
+const topPValueSpan = $<HTMLSpanElement>('top-p-value');
 const reasoningSelect = $<HTMLSelectElement>('reasoning-effort');
 const maxTokensInput = $<HTMLInputElement>('max-tokens');
+const stopSequencesInput = $<HTMLTextAreaElement>('stop-sequences');
 const toolsInput = $<HTMLTextAreaElement>('tools');
 const messagesContainer = $<HTMLDivElement>('messages');
 const emptyState = $<HTMLDivElement>('empty-state');
 const userInput = $<HTMLTextAreaElement>('user-input');
 const sendBtn = $<HTMLButtonElement>('send-btn');
+const stopBtn = $<HTMLButtonElement>('stop-btn');
 const attachBtn = $<HTMLButtonElement>('attach-btn');
 const clearBtn = $<HTMLButtonElement>('clear-chat');
+const resetParamsBtn = $<HTMLButtonElement>('reset-params-btn');
 const fileInput = $<HTMLInputElement>('file-input');
 const inputAttachments = $<HTMLDivElement>('input-attachments');
 const statusDot = $<HTMLSpanElement>('status-dot');
@@ -74,9 +87,22 @@ const modelsModal = $<HTMLDivElement>('models-modal');
 const modelsList = $<HTMLDivElement>('models-list');
 const modelsModalCancel = $<HTMLButtonElement>('models-modal-cancel');
 const themeToggleBtn = $<HTMLButtonElement>('theme-toggle-btn');
+const providersBtn = $<HTMLButtonElement>('providers-btn');
+const providersModal = $<HTMLDivElement>('providers-modal');
+const providersList = $<HTMLDivElement>('providers-list');
+const providersModalCancel = $<HTMLButtonElement>('providers-modal-cancel');
+const providerSaveBtn = $<HTMLButtonElement>('provider-save-btn');
+const providerNameInput = $<HTMLInputElement>('provider-name');
+const providerEndpointInput = $<HTMLInputElement>('provider-endpoint');
+const providerModelInput = $<HTMLInputElement>('provider-model');
+const providerApikeyInput = $<HTMLInputElement>('provider-apikey');
 
 function getCurrentChat(): Chat | null {
-  return chats.find(c => c.id === currentChatId) || null;
+  const chat = chats.find(c => c.id === currentChatId) || null;
+  if (chat && !chat.messages) {
+    chat.messages = [];
+  }
+  return chat;
 }
 
 async function init() {
@@ -120,6 +146,15 @@ async function init() {
     temperatureInput.value = String(savedInference.temperature ?? 1);
     temperatureInput.disabled = !savedInference.temperatureEnabled;
     tempValueSpan.textContent = (savedInference.temperature ?? 1).toFixed(1);
+    
+    topKInput.value = String(savedInference.top_k ?? 0);
+    topKValueSpan.textContent = String(savedInference.top_k ?? 0);
+    
+    topPInput.value = String(savedInference.top_p ?? 0);
+    topPValueSpan.textContent = (savedInference.top_p ?? 0).toFixed(2);
+    
+    stopSequencesInput.value = savedInference.stop?.join('\n') ?? '';
+    
     reasoningSelect.value = savedInference.reasoningEffort;
     maxTokensInput.value = savedInference.maxCompletionTokens ? String(savedInference.maxCompletionTokens) : '';
     toolsInput.value = savedInference.tools;
@@ -241,8 +276,17 @@ function setupEventListeners() {
     tempValueSpan.textContent = parseFloat(temperatureInput.value).toFixed(1);
     saveInferenceConfigDebounced();
   });
+  topKInput.addEventListener('input', () => {
+    topKValueSpan.textContent = topKInput.value;
+    saveInferenceConfigDebounced();
+  });
+  topPInput.addEventListener('input', () => {
+    topPValueSpan.textContent = parseFloat(topPInput.value).toFixed(2);
+    saveInferenceConfigDebounced();
+  });
   reasoningSelect.addEventListener('change', saveInferenceConfigDebounced);
   maxTokensInput.addEventListener('input', saveInferenceConfigDebounced);
+  stopSequencesInput.addEventListener('input', saveInferenceConfigDebounced);
   toolsInput.addEventListener('input', () => {
     validateToolsJson();
     saveInferenceConfigDebounced();
@@ -261,13 +305,20 @@ function setupEventListeners() {
   });
 
   sendBtn.addEventListener('click', sendMessage);
+  stopBtn.addEventListener('click', stopStreaming);
   attachBtn.addEventListener('click', () => fileInput.click());
   clearBtn.addEventListener('click', clearChat);
+  resetParamsBtn.addEventListener('click', resetParameters);
   fileInput.addEventListener('change', handleFileSelect);
+  userInput.addEventListener('paste', handlePaste);
   addTabBtn.addEventListener('click', addNewTab);
   listModelsBtn.addEventListener('click', openModelsModal);
   modelsModalCancel.addEventListener('click', () => modelsModal.style.display = 'none');
   themeToggleBtn.addEventListener('click', toggleTheme);
+
+  providersBtn.addEventListener('click', openProvidersModal);
+  providersModalCancel.addEventListener('click', closeProvidersModal);
+  providerSaveBtn.addEventListener('click', saveOrUpdateProvider);
 
   // Initialize theme from localStorage
   const savedTheme = localStorage.getItem('theme') || 'dark';
@@ -286,6 +337,90 @@ function setupEventListeners() {
   });
 
   editModalSubmit.addEventListener('click', submitEditedMessage);
+
+  document.querySelectorAll('.hint-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const target = e.target as HTMLButtonElement;
+      const endpoint = target.dataset.endpoint;
+      const tool = target.dataset.tool;
+      
+      if (endpoint) {
+        providerEndpointInput.value = endpoint;
+      }
+
+      if (tool) {
+        const toolExamples: Record<string, any[]> = {
+          weather: [{
+            type: "function",
+            function: {
+              name: "get_weather",
+              description: "Get the current weather for a location",
+              parameters: {
+                type: "object",
+                properties: {
+                  location: {
+                    type: "string",
+                    description: "The city and state, e.g. San Francisco, CA"
+                  },
+                  unit: {
+                    type: "string",
+                    enum: ["celsius", "fahrenheit"],
+                    description: "The temperature unit"
+                  }
+                },
+                required: ["location"]
+              }
+            }
+          }],
+          calculator: [{
+            type: "function",
+            function: {
+              name: "calculate",
+              description: "Perform mathematical calculations",
+              parameters: {
+                type: "object",
+                properties: {
+                  expression: {
+                    type: "string",
+                    description: "The mathematical expression to evaluate, e.g. '2 + 2' or 'sqrt(16)'"
+                  }
+                },
+                required: ["expression"]
+              }
+            }
+          }],
+          websearch: [{
+            type: "function",
+            function: {
+              name: "web_search",
+              description: "Search the web for current information",
+              parameters: {
+                type: "object",
+                properties: {
+                  query: {
+                    type: "string",
+                    description: "The search query"
+                  },
+                  num_results: {
+                    type: "integer",
+                    description: "Number of results to return (default: 5)",
+                    minimum: 1,
+                    maximum: 10
+                  }
+                },
+                required: ["query"]
+              }
+            }
+          }]
+        };
+
+        if (toolExamples[tool]) {
+          toolsInput.value = JSON.stringify(toolExamples[tool], null, 2);
+          saveInferenceConfigDebounced();
+        }
+      }
+    });
+  });
 }
 
 let saveModelTimeout: number;
@@ -307,6 +442,16 @@ function saveInferenceConfigDebounced() {
     inferenceConfig.systemPrompt = systemPromptInput.value;
     inferenceConfig.temperatureEnabled = tempEnabledInput.checked;
     inferenceConfig.temperature = parseFloat(temperatureInput.value);
+    
+    const topKValue = parseInt(topKInput.value, 10);
+    inferenceConfig.top_k = topKValue > 0 ? topKValue : null;
+    
+    const topPValue = parseFloat(topPInput.value);
+    inferenceConfig.top_p = topPValue > 0 ? topPValue : null;
+    
+    const stopSeq = stopSequencesInput.value.split('\n').filter(s => s.trim());
+    inferenceConfig.stop = stopSeq.length > 0 ? stopSeq : [];
+    
     inferenceConfig.reasoningEffort = reasoningSelect.value as InferenceConfig['reasoningEffort'];
     inferenceConfig.maxCompletionTokens = maxTokensInput.value ? parseInt(maxTokensInput.value, 10) : null;
     inferenceConfig.tools = toolsInput.value;
@@ -362,6 +507,57 @@ function renderMessages() {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+async function updateMessageContent(msgIndex: number, segments: MessageSegment[], currentSegmentType?: 'content' | 'reasoning' | null) {
+  const msgEl = messagesContainer.querySelector(`.message[data-index="${msgIndex}"]`);
+  if (!msgEl) return;
+
+  const chat = getCurrentChat();
+  const msg = chat?.messages[msgIndex];
+  if (!msg) return;
+
+  // Find or create content container
+  let contentContainer = msgEl.querySelector('.message-body');
+  if (!contentContainer) {
+    const header = msgEl.querySelector('.message-header');
+    contentContainer = document.createElement('div');
+    contentContainer.className = 'message-body';
+    if (header?.nextSibling) {
+      msgEl.insertBefore(contentContainer, header.nextSibling);
+    } else {
+      msgEl.appendChild(contentContainer);
+    }
+  }
+
+  // Render segments incrementally
+  let html = '';
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    const isLastSegment = i === segments.length - 1;
+    const isStreaming = isLastSegment && currentSegmentType === segment.type;
+    
+    if (segment.type === 'reasoning') {
+      html += `
+        <details class="reasoning-block"${isStreaming ? ' open' : ''}>
+          <summary>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            Thinking
+          </summary>
+          <div class="reasoning-content">${await marked.parse(segment.text)}</div>
+        </details>
+      `;
+    } else if (segment.type === 'content') {
+      html += `<div class="message-content markdown-body">${await marked.parse(segment.text)}</div>`;
+    }
+  }
+
+  contentContainer.innerHTML = html;
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
 function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
   const div = document.createElement('div');
   div.className = 'message';
@@ -394,16 +590,45 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
   }
 
   let contentHtml = '';
-  if (msg.content || msg.role === 'assistant') {
-    const content = msg.content || '';
-    if (msg.role === 'assistant' && content) {
-      contentHtml = `<div class="message-content markdown-body">${marked.parse(content)}</div>`;
-    } else {
-      contentHtml = `<div class="message-content">${escapeHtml(content)}</div>`;
+  
+  // Render segments if available (interleaved reasoning and content)
+  if (msg.segments && msg.segments.length > 0) {
+    for (const segment of msg.segments) {
+      if (segment.type === 'reasoning') {
+        contentHtml += `
+          <details class="reasoning-block">
+            <summary>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+                <line x1="12" y1="17" x2="12.01" y2="17"/>
+              </svg>
+              Thinking
+            </summary>
+            <div class="reasoning-content">${marked.parse(segment.text)}</div>
+          </details>
+        `;
+      } else if (segment.type === 'content') {
+        if (msg.role === 'assistant') {
+          contentHtml += `<div class="message-content markdown-body">${marked.parse(segment.text)}</div>`;
+        } else {
+          contentHtml += `<div class="message-content">${escapeHtml(segment.text)}</div>`;
+        }
+      }
+    }
+  } else {
+    // Fallback to legacy rendering for backward compatibility
+    if (msg.content || msg.role === 'assistant') {
+      const content = msg.content || '';
+      if (msg.role === 'assistant' && content) {
+        contentHtml = `<div class="message-content markdown-body">${marked.parse(content)}</div>`;
+      } else {
+        contentHtml = `<div class="message-content">${escapeHtml(content)}</div>`;
+      }
     }
   }
 
-  if (msg.role === 'assistant' && !msg.content && !msg.toolCalls?.length) {
+  if (msg.role === 'assistant' && !msg.content && !msg.segments?.length && !msg.toolCalls?.length) {
     contentHtml += `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
   }
 
@@ -455,7 +680,8 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
     `;
   }
 
-  const reasoningHtml = msg.reasoning ? `
+  // Only show single reasoning block at top if using legacy mode (no segments)
+  const reasoningHtml = (msg.reasoning && !msg.segments?.length) ? `
     <details class="reasoning-block">
       <summary>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -465,7 +691,7 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
         </svg>
         Thinking
       </summary>
-      <div class="reasoning-content">${escapeHtml(msg.reasoning)}</div>
+      <div class="reasoning-content">${marked.parse(msg.reasoning)}</div>
     </details>
   ` : '';
 
@@ -484,8 +710,10 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
         </div>
       ` : ''}
     </div>
-    ${reasoningHtml}
-    ${contentHtml}
+    <div class="message-body">
+      ${reasoningHtml}
+      ${contentHtml}
+    </div>
     ${msg.usage ? `<div class="token-usage"><span><i class="ri-arrow-down-line"></i>${msg.usage.promptTokens} in</span><span><i class="ri-arrow-up-line"></i>${msg.usage.completionTokens} out</span>${msg.usage.cachedTokens ? `<span><i class="ri-database-2-line"></i>${msg.usage.cachedTokens} cached</span>` : ''}${msg.usage.tokensPerSecond ? `<span><i class="ri-speed-line"></i>${msg.usage.tokensPerSecond.toFixed(1)} tok/s</span>` : ''}${msg.usage.responseTimeMs ? `<span><i class="ri-timer-line"></i>${(msg.usage.responseTimeMs / 1000).toFixed(2)}s</span>` : ''}</div>` : ''}
   `;
 
@@ -650,6 +878,151 @@ function renderModelsList(models: Model[]) {
   }
 }
 
+async function openProvidersModal() {
+  providers = await getAllProviders();
+  renderProvidersList();
+  prefillProviderForm();
+  providersModal.style.display = 'flex';
+}
+
+function prefillProviderForm() {
+  const endpoint = endpointInput.value.trim();
+  const model = modelNameInput.value.trim();
+  const apiKey = apiKeyInput.value.trim();
+
+  if (endpoint && model && apiKey) {
+    try {
+      const host = new URL(endpoint).hostname;
+      providerNameInput.value = `${model} from ${host}`;
+    } catch {
+      providerNameInput.value = model || '';
+    }
+    providerEndpointInput.value = endpoint;
+    providerModelInput.value = model;
+    providerApikeyInput.value = apiKey;
+  }
+}
+
+function closeProvidersModal() {
+  providersModal.style.display = 'none';
+  clearProviderForm();
+}
+
+function clearProviderForm() {
+  editingProviderId = null;
+  providerNameInput.value = '';
+  providerEndpointInput.value = '';
+  providerModelInput.value = '';
+  providerApikeyInput.value = '';
+  providerSaveBtn.innerHTML = '<i class="ri-add-line"></i> Add Provider';
+}
+
+function renderProvidersList() {
+  if (providers.length === 0) {
+    providersList.innerHTML = '<div class="providers-empty">No providers saved yet</div>';
+    return;
+  }
+
+  providersList.innerHTML = '';
+
+  for (const provider of providers) {
+    const div = document.createElement('div');
+    div.className = 'provider-item';
+    div.innerHTML = `
+      <div class="provider-item-info">
+        <div class="provider-item-name">${escapeHtml(provider.name)}</div>
+        <div class="provider-item-details">
+          <span>${escapeHtml(provider.model)}</span>
+          <span>${escapeHtml(new URL(provider.endpoint).hostname)}</span>
+        </div>
+      </div>
+      <div class="provider-item-actions">
+        <button class="btn btn-icon btn-sm provider-edit-btn" title="Edit provider">
+          <i class="ri-pencil-line"></i>
+        </button>
+        <button class="btn btn-icon btn-sm provider-delete-btn" title="Delete provider">
+          <i class="ri-delete-bin-line"></i>
+        </button>
+        <button class="btn btn-icon btn-sm provider-select-btn" title="Use this provider">
+          <i class="ri-arrow-right-line"></i>
+        </button>
+      </div>
+    `;
+
+    div.querySelector('.provider-select-btn')?.addEventListener('click', () => selectProvider(provider));
+    div.querySelector('.provider-edit-btn')?.addEventListener('click', () => editProvider(provider));
+    div.querySelector('.provider-delete-btn')?.addEventListener('click', () => removeProvider(provider.id));
+
+    providersList.appendChild(div);
+  }
+}
+
+function selectProvider(provider: Provider) {
+  modelNameInput.value = provider.model;
+  endpointInput.value = provider.endpoint;
+  apiKeyInput.value = provider.apiKey;
+
+  modelConfig.name = provider.model;
+  modelConfig.endpoint = provider.endpoint;
+  modelConfig.apiKey = provider.apiKey;
+
+  saveModelConfigDebounced();
+  updateModelDisplay();
+  closeProvidersModal();
+}
+
+function editProvider(provider: Provider) {
+  editingProviderId = provider.id;
+  providerNameInput.value = provider.name;
+  providerEndpointInput.value = provider.endpoint;
+  providerModelInput.value = provider.model;
+  providerApikeyInput.value = provider.apiKey;
+  providerSaveBtn.innerHTML = '<i class="ri-save-line"></i> Update Provider';
+}
+
+async function saveOrUpdateProvider() {
+  const name = providerNameInput.value.trim();
+  const endpoint = providerEndpointInput.value.trim();
+  const model = providerModelInput.value.trim();
+  const apiKey = providerApikeyInput.value.trim();
+
+  if (!name || !endpoint || !model || !apiKey) {
+    showError('Please fill all provider fields');
+    return;
+  }
+
+  try {
+    new URL(endpoint);
+  } catch {
+    showError('Invalid endpoint URL');
+    return;
+  }
+
+  const provider: Provider = {
+    id: editingProviderId || crypto.randomUUID(),
+    name,
+    endpoint,
+    model,
+    apiKey,
+    createdAt: editingProviderId ? (providers.find(p => p.id === editingProviderId)?.createdAt || Date.now()) : Date.now()
+  };
+
+  await saveProvider(provider);
+  providers = await getAllProviders();
+  renderProvidersList();
+  clearProviderForm();
+}
+
+async function removeProvider(id: string) {
+  await deleteProvider(id);
+  providers = await getAllProviders();
+  renderProvidersList();
+
+  if (editingProviderId === id) {
+    clearProviderForm();
+  }
+}
+
 async function submitToolResponse() {
   const chat = getCurrentChat();
   if (!pendingToolCall || !chat) return;
@@ -734,9 +1107,43 @@ function renderInputAttachments() {
   });
 }
 
+async function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+
+  const files: File[] = [];
+  
+  for (const item of Array.from(items)) {
+    if (item.kind === 'file') {
+      const file = item.getAsFile();
+      if (file) {
+        files.push(file);
+      }
+    }
+  }
+
+  if (files.length === 0) return;
+
+  e.preventDefault();
+
+  for (const file of files) {
+    const base64 = await fileToBase64(file);
+    const attachment: FileAttachment = {
+      id: crypto.randomUUID(),
+      name: file.name,
+      type: file.type,
+      data: base64,
+      size: file.size
+    };
+    pendingAttachments.push(attachment);
+  }
+
+  renderInputAttachments();
+}
+
 async function sendMessage() {
   const chat = getCurrentChat();
-  if (!chat) return;
+  if (!chat || !chat.messages) return;
 
   const content = userInput.value.trim();
   if (!content && pendingAttachments.length === 0) return;
@@ -771,7 +1178,7 @@ async function sendMessage() {
 
 async function sendToApi() {
   const chat = getCurrentChat();
-  if (!chat) return;
+  if (!chat || !chat.messages) return;
 
   if (!modelConfig.endpoint || !modelConfig.name) {
     showError('Please configure model endpoint and name');
@@ -779,8 +1186,10 @@ async function sendToApi() {
   }
 
   isStreaming = true;
+  abortController = new AbortController();
   setStatus('Streaming...', true);
-  sendBtn.disabled = true;
+  sendBtn.style.display = 'none';
+  stopBtn.style.display = 'flex';
 
   const assistantMsg: ChatMessage = {
     id: crypto.randomUUID(),
@@ -793,16 +1202,35 @@ async function sendToApi() {
 
   const msgIndex = chat.messages.length - 1;
   const msgEl = messagesContainer.querySelector(`.message[data-index="${msgIndex}"]`);
-  const contentEl = msgEl?.querySelector('.message-content');
+
+  let spinnerEl: HTMLElement | null = null;
+  const showStreamingSpinner = () => {
+    if (!msgEl || spinnerEl) return;
+    spinnerEl = document.createElement('div');
+    spinnerEl.className = 'streaming-spinner';
+    spinnerEl.innerHTML = '<div class="streaming-spinner-icon"></div><span>Streaming...</span>';
+    msgEl.appendChild(spinnerEl);
+  };
+
+  const hideStreamingSpinner = () => {
+    if (spinnerEl) {
+      spinnerEl.remove();
+      spinnerEl = null;
+    }
+  };
+
+  showStreamingSpinner();
 
   try {
     const request = buildRequest(modelConfig, inferenceConfig, chat.messages.slice(0, -1));
     let fullContent = '';
     let fullReasoning = '';
+    const segments: MessageSegment[] = [];
+    let currentSegmentType: 'content' | 'reasoning' | null = null;
     const toolCalls: Map<number, { id: string; type: string; name: string; arguments: string }> = new Map();
     const startTime = performance.now();
 
-    for await (const event of streamChat(modelConfig, request)) {
+    for await (const event of streamChat(modelConfig, request, abortController!.signal)) {
       const choice = event.choices[0];
       if (!choice) continue;
 
@@ -811,30 +1239,45 @@ async function sendToApi() {
       if (reasoningChunk) {
         fullReasoning += reasoningChunk;
         chat.messages[msgIndex].reasoning = fullReasoning;
+        
+        // Create new segment if switching from content to reasoning
+        if (currentSegmentType === 'content' && fullContent) {
+          segments.push({ type: 'content', text: fullContent });
+          fullContent = '';
+        }
+        currentSegmentType = 'reasoning';
+
+        // Live update reasoning during streaming
+        const liveSegments = [...segments];
+        if (fullReasoning) {
+          liveSegments.push({ type: 'reasoning', text: fullReasoning });
+        }
+        chat.messages[msgIndex].segments = liveSegments;
+        await updateMessageContent(msgIndex, liveSegments, currentSegmentType);
       }
 
       if (choice.delta.content) {
+        // Create new segment if switching from reasoning to content
+        if (currentSegmentType === 'reasoning' && fullReasoning) {
+          segments.push({ type: 'reasoning', text: fullReasoning });
+          fullReasoning = '';
+        }
+        currentSegmentType = 'content';
+        
         fullContent += choice.delta.content;
+        chat.messages[msgIndex].content = fullContent;
 
-        // Remove typing indicator if it exists
         const typingIndicator = msgEl?.querySelector('.typing-indicator');
         if (typingIndicator) {
           typingIndicator.remove();
         }
 
-        if (contentEl) {
-          if (!contentEl.classList.contains('markdown-body')) {
-            contentEl.classList.add('markdown-body');
-          }
-          // Parse markdown incrementally
-          contentEl.innerHTML = await marked.parse(fullContent);
+        const liveSegments = [...segments];
+        if (fullContent) {
+          liveSegments.push({ type: 'content', text: fullContent });
         }
-        chat.messages[msgIndex].content = fullContent;
-        // Scroll adjustment: check if user was at bottom before update to keep autoscroll
-        // simple version: just scroll
-        // messagesContainer.scrollTop = messagesContainer.scrollHeight; 
-        // Keeping original scroll behavior
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        chat.messages[msgIndex].segments = liveSegments;
+        await updateMessageContent(msgIndex, liveSegments, currentSegmentType);
       }
 
       if (choice.delta.tool_calls) {
@@ -869,15 +1312,55 @@ async function sendToApi() {
       }
     }
 
-    // Extract <think>...</think> tags from content if no API reasoning was provided
-    if (!fullReasoning && fullContent) {
-      const thinkMatch = fullContent.match(/^<think>([\s\S]*?)<\/think>\s*/);
-      if (thinkMatch) {
-        fullReasoning = thinkMatch[1].trim();
-        fullContent = fullContent.slice(thinkMatch[0].length);
-        chat.messages[msgIndex].reasoning = fullReasoning;
-        chat.messages[msgIndex].content = fullContent;
+    // Finalize last segment
+    if (currentSegmentType === 'content' && fullContent) {
+      segments.push({ type: 'content', text: fullContent });
+    } else if (currentSegmentType === 'reasoning' && fullReasoning) {
+      segments.push({ type: 'reasoning', text: fullReasoning });
+    }
+
+    // Extract ALL <think>...</think> tags from content if no API reasoning was provided
+    if (segments.length === 0 && fullContent) {
+      const extractedSegments: MessageSegment[] = [];
+      const thinkRegex = /<think>([\s\S]*?)<\/think>/g;
+      let lastIndex = 0;
+      let match;
+
+      while ((match = thinkRegex.exec(fullContent)) !== null) {
+        // Add content before this <think> block
+        if (match.index > lastIndex) {
+          const contentBefore = fullContent.slice(lastIndex, match.index).trim();
+          if (contentBefore) {
+            extractedSegments.push({ type: 'content', text: contentBefore });
+          }
+        }
+        // Add reasoning block
+        extractedSegments.push({ type: 'reasoning', text: match[1].trim() });
+        lastIndex = thinkRegex.lastIndex;
       }
+
+      // Add remaining content after last <think> block
+      if (lastIndex < fullContent.length) {
+        const contentAfter = fullContent.slice(lastIndex).trim();
+        if (contentAfter) {
+          extractedSegments.push({ type: 'content', text: contentAfter });
+        }
+      }
+
+      if (extractedSegments.length > 0) {
+        segments.push(...extractedSegments);
+        // Clear old fields for backward compat display
+        fullContent = '';
+        fullReasoning = '';
+      }
+    }
+
+    // Store segments if any were created
+    if (segments.length > 0) {
+      chat.messages[msgIndex].segments = segments;
+      // Keep legacy fields for backward compatibility
+      chat.messages[msgIndex].content = segments.filter(s => s.type === 'content').map(s => s.text).join('\n\n');
+      chat.messages[msgIndex].reasoning = segments.filter(s => s.type === 'reasoning').map(s => s.text).join('\n\n');
     }
 
     if (toolCalls.size > 0) {
@@ -894,20 +1377,31 @@ async function sendToApi() {
     chat.updatedAt = Date.now();
     await saveChat(chat);
 
+    hideStreamingSpinner();
     messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
     renderMessages();
 
   } catch (err) {
-    chat.messages.pop();
-    await saveChat(chat);
-    messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-    renderMessages();
-    showError(err instanceof Error ? err.message : 'Unknown error');
+    hideStreamingSpinner();
+    if (err instanceof Error && err.name === 'AbortError') {
+      chat.messages[msgIndex].content = (chat.messages[msgIndex].content || '') + ' [Interrupted by user]';
+      await saveChat(chat);
+      messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
+      renderMessages();
+    } else {
+      chat.messages.pop();
+      await saveChat(chat);
+      messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
+      renderMessages();
+      showError(err instanceof Error ? err.message : 'Unknown error');
+    }
   }
 
   isStreaming = false;
+  abortController = null;
   setStatus('Ready', false);
-  sendBtn.disabled = false;
+  sendBtn.style.display = 'flex';
+  stopBtn.style.display = 'none';
 }
 
 function setStatus(text: string, streaming: boolean) {
@@ -918,15 +1412,33 @@ function setStatus(text: string, streaming: boolean) {
 }
 
 function showError(message: string) {
-  const existing = messagesContainer.querySelector('.error-message');
+  const existing = document.querySelector('.error-toast');
   if (existing) existing.remove();
 
   const div = document.createElement('div');
-  div.className = 'error-message';
+  div.className = 'error-toast';
   div.textContent = message;
-  messagesContainer.insertBefore(div, messagesContainer.firstChild);
+  document.body.appendChild(div);
 
   setTimeout(() => div.remove(), 5000);
+}
+
+function resetParameters() {
+  systemPromptInput.value = '';
+  tempEnabledInput.checked = true;
+  temperatureInput.value = '1';
+  temperatureInput.disabled = false;
+  tempValueSpan.textContent = '1.0';
+  topKInput.value = '0';
+  topKValueSpan.textContent = '0';
+  topPInput.value = '0';
+  topPValueSpan.textContent = '0.00';
+  reasoningSelect.value = 'null';
+  maxTokensInput.value = '';
+  stopSequencesInput.value = '';
+  toolsInput.value = '';
+  toolsInput.classList.remove('error');
+  saveInferenceConfigDebounced();
 }
 
 async function clearChat() {
@@ -940,6 +1452,12 @@ async function clearChat() {
   messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
   renderMessages();
   renderTabs();
+}
+
+function stopStreaming() {
+  if (abortController && isStreaming) {
+    abortController.abort();
+  }
 }
 
 function toggleTheme() {

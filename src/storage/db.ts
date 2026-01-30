@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { ModelConfig, InferenceConfig, Chat } from '../types';
+import type { ModelConfig, InferenceConfig, Chat, Provider } from '../types';
 
 interface ChatUIDB extends DBSchema {
     models: {
@@ -15,6 +15,11 @@ interface ChatUIDB extends DBSchema {
         value: Chat;
         indexes: { 'by-date': number };
     };
+    providers: {
+        key: string;
+        value: Provider;
+        indexes: { 'by-date': number };
+    };
 }
 
 let db: IDBPDatabase<ChatUIDB> | null = null;
@@ -22,12 +27,18 @@ let db: IDBPDatabase<ChatUIDB> | null = null;
 export async function getDB(): Promise<IDBPDatabase<ChatUIDB>> {
     if (db) return db;
 
-    db = await openDB<ChatUIDB>('chat-ui-db', 1, {
-        upgrade(database) {
-            database.createObjectStore('models', { keyPath: 'id' });
-            database.createObjectStore('inference', { keyPath: 'id' });
-            const chatStore = database.createObjectStore('chats', { keyPath: 'id' });
-            chatStore.createIndex('by-date', 'updatedAt');
+    db = await openDB<ChatUIDB>('chat-ui-db', 2, {
+        upgrade(database, oldVersion) {
+            if (oldVersion < 1) {
+                database.createObjectStore('models', { keyPath: 'id' });
+                database.createObjectStore('inference', { keyPath: 'id' });
+                const chatStore = database.createObjectStore('chats', { keyPath: 'id' });
+                chatStore.createIndex('by-date', 'updatedAt');
+            }
+            if (oldVersion < 2) {
+                const providerStore = database.createObjectStore('providers', { keyPath: 'id' });
+                providerStore.createIndex('by-date', 'createdAt');
+            }
         },
     });
 
@@ -85,4 +96,25 @@ export async function getAllChats(): Promise<Chat[]> {
 export async function deleteChat(id: string): Promise<void> {
     const database = await getDB();
     await database.delete('chats', id);
+}
+
+export async function saveProvider(provider: Provider): Promise<void> {
+    const database = await getDB();
+    await database.put('providers', provider);
+}
+
+export async function getProvider(id: string): Promise<Provider | undefined> {
+    const database = await getDB();
+    return database.get('providers', id);
+}
+
+export async function getAllProviders(): Promise<Provider[]> {
+    const database = await getDB();
+    const all = await database.getAllFromIndex('providers', 'by-date');
+    return all.reverse();
+}
+
+export async function deleteProvider(id: string): Promise<void> {
+    const database = await getDB();
+    await database.delete('providers', id);
 }

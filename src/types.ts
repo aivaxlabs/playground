@@ -6,11 +6,23 @@ export interface ModelConfig {
   createdAt: number;
 }
 
+export interface Provider {
+  id: string;
+  name: string;
+  endpoint: string;
+  model: string;
+  apiKey: string;
+  createdAt: number;
+}
+
 export interface InferenceConfig {
   id: string;
   systemPrompt: string;
   temperature: number | null;
   temperatureEnabled: boolean;
+  top_k: number | null;
+  top_p: number | null;
+  stop: string[];
   maxCompletionTokens: number | null;
   tools: string;
   reasoningEffort: 'null' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -24,11 +36,17 @@ export interface FileAttachment {
   size: number;
 }
 
+export interface MessageSegment {
+  type: 'content' | 'reasoning';
+  text: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string | null;
   reasoning?: string;
+  segments?: MessageSegment[];
   toolCalls?: ToolCall[];
   toolCallId?: string;
   attachments?: FileAttachment[];
