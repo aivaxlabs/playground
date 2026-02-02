@@ -28,7 +28,9 @@ let inferenceConfig: InferenceConfig = {
   stop: [],
   maxCompletionTokens: null,
   tools: '',
-  reasoningEffort: 'null'
+  reasoningEffort: 'null',
+  structuredJson: '',
+  extraBody: ''
 };
 
 let chats: Chat[] = [];
@@ -59,6 +61,8 @@ const reasoningSelect = $<HTMLSelectElement>('reasoning-effort');
 const maxTokensInput = $<HTMLInputElement>('max-tokens');
 const stopSequencesInput = $<HTMLTextAreaElement>('stop-sequences');
 const toolsInput = $<HTMLTextAreaElement>('tools');
+const structuredJsonInput = $<HTMLTextAreaElement>('structured-json');
+const extraBodyInput = $<HTMLTextAreaElement>('extra-body');
 const messagesContainer = $<HTMLDivElement>('messages');
 const emptyState = $<HTMLDivElement>('empty-state');
 const userInput = $<HTMLTextAreaElement>('user-input');
@@ -97,12 +101,26 @@ const providerNameInput = $<HTMLInputElement>('provider-name');
 const providerEndpointInput = $<HTMLInputElement>('provider-endpoint');
 const providerModelInput = $<HTMLInputElement>('provider-model');
 const providerApikeyInput = $<HTMLInputElement>('provider-apikey');
-const systemToolsBtn = $<HTMLButtonElement>('system-tools-btn');
-const systemToolsModal = $<HTMLDivElement>('system-tools-modal');
-const systemToolsModalClose = $<HTMLButtonElement>('system-tools-modal-close');
-const systemPromptPreview = $<HTMLSpanElement>('system-prompt-preview');
-const toolsPreview = $<HTMLSpanElement>('tools-preview');
-const stopSequencesPreview = $<HTMLSpanElement>('stop-sequences-preview');
+const systemPromptBtn = $<HTMLButtonElement>('system-prompt-btn');
+const systemPromptModal = $<HTMLDivElement>('system-prompt-modal');
+const systemPromptModalClose = $<HTMLButtonElement>('system-prompt-modal-close');
+const promptDot = $<HTMLSpanElement>('prompt-dot');
+const toolsBtn = $<HTMLButtonElement>('tools-btn');
+const toolsModal = $<HTMLDivElement>('tools-modal');
+const toolsModalClose = $<HTMLButtonElement>('tools-modal-close');
+const toolsDot = $<HTMLSpanElement>('tools-dot');
+const stopSeqBtn = $<HTMLButtonElement>('stop-btn');
+const stopSeqModal = $<HTMLDivElement>('stop-modal');
+const stopSeqModalClose = $<HTMLButtonElement>('stop-modal-close');
+const stopSeqDot = $<HTMLSpanElement>('stop-dot');
+const formatBtn = $<HTMLButtonElement>('format-btn');
+const formatModal = $<HTMLDivElement>('format-modal');
+const formatModalClose = $<HTMLButtonElement>('format-modal-close');
+const formatDot = $<HTMLSpanElement>('format-dot');
+const extraBtn = $<HTMLButtonElement>('extra-btn');
+const extraModal = $<HTMLDivElement>('extra-modal');
+const extraModalClose = $<HTMLButtonElement>('extra-modal-close');
+const extraDot = $<HTMLSpanElement>('extra-dot');
 const viewCodeBtn = $<HTMLButtonElement>('view-code-btn');
 const viewCodeModal = $<HTMLDivElement>('view-code-modal');
 const viewCodeModalCancel = $<HTMLButtonElement>('view-code-modal-cancel');
@@ -181,6 +199,8 @@ async function init() {
     reasoningSelect.value = savedInference.reasoningEffort;
     maxTokensInput.value = savedInference.maxCompletionTokens ? String(savedInference.maxCompletionTokens) : '';
     toolsInput.value = savedInference.tools;
+    structuredJsonInput.value = savedInference.structuredJson ?? '';
+    extraBodyInput.value = savedInference.extraBody ?? '';
   }
 
   chats = await getAllChats();
@@ -194,7 +214,7 @@ async function init() {
   renderTabs();
   renderMessages();
   updateModelDisplay();
-  updateSystemToolsPreview();
+  updateConfigDots();
   setupEventListeners();
 }
 
@@ -324,6 +344,14 @@ function setupEventListeners() {
     validateToolsJson();
     saveInferenceConfigDebounced();
   });
+  structuredJsonInput.addEventListener('input', () => {
+    validateJsonField(structuredJsonInput);
+    saveInferenceConfigDebounced();
+  });
+  extraBodyInput.addEventListener('input', () => {
+    validateJsonField(extraBodyInput);
+    saveInferenceConfigDebounced();
+  });
 
   userInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -353,8 +381,20 @@ function setupEventListeners() {
   providersModalCancel.addEventListener('click', closeProvidersModal);
   providerSaveBtn.addEventListener('click', saveOrUpdateProvider);
 
-  systemToolsBtn.addEventListener('click', () => showModal(systemToolsModal));
-  systemToolsModalClose.addEventListener('click', () => hideModal(systemToolsModal));
+  systemPromptBtn.addEventListener('click', () => showModal(systemPromptModal));
+  systemPromptModalClose.addEventListener('click', () => hideModal(systemPromptModal));
+  toolsBtn.addEventListener('click', () => showModal(toolsModal));
+  toolsModalClose.addEventListener('click', () => hideModal(toolsModal));
+  stopSeqBtn.addEventListener('click', () => showModal(stopSeqModal));
+  stopSeqModalClose.addEventListener('click', () => hideModal(stopSeqModal));
+  formatBtn.addEventListener('click', () => showModal(formatModal));
+  formatModalClose.addEventListener('click', () => hideModal(formatModal));
+  extraBtn.addEventListener('click', () => showModal(extraModal));
+  extraModalClose.addEventListener('click', () => {
+    if (validateAndFormatJson(extraBodyInput)) {
+      hideModal(extraModal);
+    }
+  });
 
   viewCodeBtn.addEventListener('click', openViewCodeModal);
   viewCodeModalCancel.addEventListener('click', () => hideModal(viewCodeModal));
@@ -505,47 +545,28 @@ function saveInferenceConfigDebounced() {
     inferenceConfig.reasoningEffort = reasoningSelect.value as InferenceConfig['reasoningEffort'];
     inferenceConfig.maxCompletionTokens = maxTokensInput.value ? parseInt(maxTokensInput.value, 10) : null;
     inferenceConfig.tools = toolsInput.value;
+    inferenceConfig.structuredJson = structuredJsonInput.value;
+    inferenceConfig.extraBody = extraBodyInput.value;
     await saveInferenceConfig(inferenceConfig);
-    updateSystemToolsPreview();
+    updateConfigDots();
   }, 500);
 }
 
-function updateSystemToolsPreview() {
-  const systemPromptValue = systemPromptInput.value.trim();
-  if (systemPromptValue) {
-    systemPromptPreview.textContent = systemPromptValue;
-    systemPromptPreview.classList.remove('empty');
-  } else {
-    systemPromptPreview.textContent = 'Not set';
-    systemPromptPreview.classList.add('empty');
-  }
+function updateConfigDots() {
+  const hasPrompt = systemPromptInput.value.trim().length > 0;
+  promptDot.classList.toggle('hidden', !hasPrompt);
 
-  const toolsValue = toolsInput.value.trim();
-  if (toolsValue) {
-    try {
-      const tools = JSON.parse(toolsValue);
-      const toolCount = Array.isArray(tools) ? tools.length : 1;
-      toolsPreview.textContent = `${toolCount} tool${toolCount !== 1 ? 's' : ''} configured`;
-      toolsPreview.classList.remove('empty');
-    } catch {
-      toolsPreview.textContent = 'Invalid JSON';
-      toolsPreview.classList.remove('empty');
-    }
-  } else {
-    toolsPreview.textContent = 'None';
-    toolsPreview.classList.add('empty');
-  }
+  const hasTools = toolsInput.value.trim().length > 0;
+  toolsDot.classList.toggle('hidden', !hasTools);
 
-  const stopSeqValue = stopSequencesInput.value.trim();
-  if (stopSeqValue) {
-    const sequences = stopSeqValue.split('\n').filter(s => s.trim());
-    const count = sequences.length;
-    stopSequencesPreview.textContent = `${count} sequence${count !== 1 ? 's' : ''}: ${sequences.join(', ')}`;
-    stopSequencesPreview.classList.remove('empty');
-  } else {
-    stopSequencesPreview.textContent = 'None';
-    stopSequencesPreview.classList.add('empty');
-  }
+  const hasStop = stopSequencesInput.value.trim().length > 0;
+  stopSeqDot.classList.toggle('hidden', !hasStop);
+
+  const hasStructured = structuredJsonInput.value.trim().length > 0;
+  formatDot.classList.toggle('hidden', !hasStructured);
+
+  const hasExtra = extraBodyInput.value.trim().length > 0;
+  extraDot.classList.toggle('hidden', !hasExtra);
 }
 
 function validateToolsJson() {
@@ -560,6 +581,41 @@ function validateToolsJson() {
     return true;
   } catch {
     toolsInput.classList.add('error');
+    return false;
+  }
+}
+
+function validateJsonField(textarea: HTMLTextAreaElement) {
+  const value = textarea.value.trim();
+  if (!value) {
+    textarea.classList.remove('error');
+    return true;
+  }
+  try {
+    JSON.parse(value);
+    textarea.classList.remove('error');
+    return true;
+  } catch {
+    textarea.classList.add('error');
+    return false;
+  }
+}
+
+function validateAndFormatJson(textarea: HTMLTextAreaElement) {
+  const value = textarea.value.trim();
+  if (!value) {
+    textarea.classList.remove('error');
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    textarea.value = JSON.stringify(parsed, null, 2);
+    textarea.classList.remove('error');
+    return true;
+  } catch (error) {
+    textarea.classList.add('error');
+    const errorMessage = error instanceof Error ? error.message : 'Invalid JSON syntax';
+    alert(`Erro na sintaxe JSON:\n${errorMessage}`);
     return false;
   }
 }
@@ -647,6 +703,20 @@ async function updateMessageContent(msgIndex: number, segments: MessageSegment[]
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+function renderAssistantContent(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const formatted = JSON.stringify(parsed, null, 2);
+      return `<pre><code class="language-json">${escapeHtml(formatted)}</code></pre>`;
+    } catch {
+      return marked.parse(text) as string;
+    }
+  }
+  return marked.parse(text) as string;
+}
+
 function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
   const div = document.createElement('div');
   div.className = `message ${msg.role}`;
@@ -699,7 +769,7 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
         `;
       } else if (segment.type === 'content') {
         if (msg.role === 'assistant') {
-          contentHtml += `<div class="message-content markdown-body">${marked.parse(segment.text)}</div>`;
+          contentHtml += `<div class="message-content markdown-body">${renderAssistantContent(segment.text)}</div>`;
         } else {
           contentHtml += `<div class="message-content">${escapeHtml(segment.text)}</div>`;
         }
@@ -710,7 +780,7 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
     if (msg.content || msg.role === 'assistant') {
       const content = msg.content || '';
       if (msg.role === 'assistant' && content) {
-        contentHtml = `<div class="message-content markdown-body">${marked.parse(content)}</div>`;
+        contentHtml = `<div class="message-content markdown-body">${renderAssistantContent(content)}</div>`;
       } else {
         contentHtml = `<div class="message-content">${escapeHtml(content)}</div>`;
       }
@@ -1117,7 +1187,7 @@ async function importCurlCommand() {
       reasoningSelect.value = imported.reasoningEffort;
     }
     await saveInferenceConfig(inferenceConfig);
-    updateSystemToolsPreview();
+    updateConfigDots();
 
     if (imported.messages.length > 0) {
       const chat = getCurrentChat();
@@ -1494,6 +1564,10 @@ async function sendToApi() {
     for await (const event of streamChat(modelConfig, request, abortController!.signal)) {
       const choice = event.choices[0];
       if (!choice) continue;
+
+      if (choice.finish_reason === 'error' && event.error) {
+        throw new Error(`[${event.error.code}] ${event.error.message}`);
+      }
 
       // Capture reasoning from API (DeepSeek, OpenAI o1, etc.)
       const reasoningChunk = choice.delta.reasoning || choice.delta.reasoning_content;

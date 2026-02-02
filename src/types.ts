@@ -26,6 +26,8 @@ export interface InferenceConfig {
   maxCompletionTokens: number | null;
   tools: string;
   reasoningEffort: 'null' | 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  structuredJson: string;
+  extraBody: string;
 }
 
 export interface FileAttachment {
@@ -101,12 +103,18 @@ export interface StreamChoice {
   finish_reason: string | null;
 }
 
+export interface StreamError {
+  code: string;
+  message: string;
+}
+
 export interface StreamEvent {
   id: string;
   object: string;
   created: number;
   model: string;
   choices: StreamChoice[];
+  error?: StreamError;
   usage?: {
     prompt_tokens: number;
     completion_tokens: number;

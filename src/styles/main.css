@@ -168,35 +168,6 @@ body {
     letter-spacing: 1px;
 }
 
-/* Config preview */
-.config-preview {
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-sm);
-    padding: 8px 10px;
-    font-size: 11px;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.preview-item {
-    display: flex;
-    gap: 6px;
-    line-height: 1.4;
-}
-
-.preview-label {
-    color: var(--text-muted);
-    flex-shrink: 0;
-}
-
-.preview-value {
-    color: var(--text-secondary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 /* Params accordion */
 .params-accordion {
     border: none;
@@ -790,7 +761,6 @@ body {
     padding-top: 12px;
     border-top: 1px solid var(--border);
     font-size: 11px;
-    color: var(--text-muted);
     font-family: 'Fira Code', monospace;
 }
 
@@ -1046,6 +1016,10 @@ body {
     overflow-y: auto;
 }
 
+.modal.modal-sm {
+    max-width: 400px;
+}
+
 .modal.modal-md {
     max-width: 500px;
 }
@@ -1071,6 +1045,40 @@ body {
     justify-content: flex-end;
     gap: 8px;
     margin-top: 16px;
+}
+
+/* Config buttons */
+.config-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 4px;
+}
+
+.btn-config {
+    flex: 1;
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 6px;
+    font-size: 11px;
+    position: relative;
+}
+
+.btn-config i {
+    font-size: 18px;
+}
+
+.btn-config span {
+    font-size: 10px;
+}
+
+.config-dot {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
 }
 
 /* Form groups (for modals) */
@@ -1115,6 +1123,16 @@ body {
 .form-group textarea {
     resize: vertical;
     min-height: 80px;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.form-row .form-group {
+    margin-bottom: 0;
 }
 
 .hint-buttons {

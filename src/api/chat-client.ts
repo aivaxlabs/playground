@@ -1,5 +1,25 @@
 import type { ChatMessage, StreamEvent, ToolCall, ModelConfig, InferenceConfig } from '../types';
 
+function deepMerge<T extends Record<string, unknown>>(target: T, source: Record<string, unknown>): T {
+    const result = { ...target };
+    for (const key of Object.keys(source)) {
+        const sourceVal = source[key];
+        const targetVal = result[key as keyof T];
+        if (
+            sourceVal && typeof sourceVal === 'object' && !Array.isArray(sourceVal) &&
+            targetVal && typeof targetVal === 'object' && !Array.isArray(targetVal)
+        ) {
+            (result as Record<string, unknown>)[key] = deepMerge(
+                targetVal as Record<string, unknown>,
+                sourceVal as Record<string, unknown>
+            );
+        } else {
+            (result as Record<string, unknown>)[key] = sourceVal;
+        }
+    }
+    return result;
+}
+
 export interface ChatRequest {
     model: string;
     messages: {
@@ -16,6 +36,8 @@ export interface ChatRequest {
     max_completion_tokens?: number;
     tools?: object[];
     reasoning_effort?: string;
+    response_format?: object;
+    [key: string]: unknown;
 }
 
 export function buildRequest(
@@ -104,6 +126,26 @@ export function buildRequest(
 
     if (inferenceConfig.reasoningEffort !== 'null') {
         request.reasoning_effort = inferenceConfig.reasoningEffort;
+    }
+
+    if (inferenceConfig.structuredJson?.trim()) {
+        try {
+            const schema = JSON.parse(inferenceConfig.structuredJson);
+            request.response_format = {
+                type: 'json_schema',
+                json_schema: {
+                    name: 'response',
+                    schema
+                }
+            };
+        } catch { }
+    }
+
+    if (inferenceConfig.extraBody?.trim()) {
+        try {
+            const extra = JSON.parse(inferenceConfig.extraBody);
+            return deepMerge(request, extra);
+        } catch { }
     }
 
     return request;

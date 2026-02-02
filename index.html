@@ -63,25 +63,33 @@
         </div>
 
         <div class="sidebar-section">
-          <div class="section-label">System & Tools</div>
-          <button class="btn btn-ghost" id="system-tools-btn">
-            <i class="ri-settings-4-line"></i>
-            <span>Configure</span>
-            <span class="badge hidden" id="config-badge"></span>
-          </button>
-          <div class="config-preview" id="system-tools-preview">
-            <div class="preview-item">
-              <span class="preview-label">Prompt:</span>
-              <span class="preview-value" id="system-prompt-preview">Not set</span>
-            </div>
-            <div class="preview-item">
-              <span class="preview-label">Tools:</span>
-              <span class="preview-value" id="tools-preview">None</span>
-            </div>
-            <div class="preview-item">
-              <span class="preview-label">Stop:</span>
-              <span class="preview-value" id="stop-sequences-preview">None</span>
-            </div>
+          <div class="section-label">Configuration</div>
+          <div class="config-buttons">
+            <button class="btn btn-ghost btn-config" id="system-prompt-btn" title="System Prompt">
+              <i class="ri-message-3-line"></i>
+              <span>System Prompt</span>
+              <span class="config-dot hidden" id="prompt-dot"></span>
+            </button>
+            <button class="btn btn-ghost btn-config" id="tools-btn" title="Tools">
+              <i class="ri-tools-line"></i>
+              <span>Tools</span>
+              <span class="config-dot hidden" id="tools-dot"></span>
+            </button>
+            <button class="btn btn-ghost btn-config" id="stop-btn" title="Stop Sequences">
+              <i class="ri-stop-circle-line"></i>
+              <span>Stop sentences</span>
+              <span class="config-dot hidden" id="stop-dot"></span>
+            </button>
+            <button class="btn btn-ghost btn-config" id="format-btn" title="Response Format">
+              <i class="ri-braces-line"></i>
+              <span>JSON Schema</span>
+              <span class="config-dot hidden" id="format-dot"></span>
+            </button>
+            <button class="btn btn-ghost btn-config" id="extra-btn" title="Extra Body">
+              <i class="ri-add-box-line"></i>
+              <span>Extra body</span>
+              <span class="config-dot hidden" id="extra-dot"></span>
+            </button>
           </div>
         </div>
 
@@ -265,16 +273,25 @@
     </div>
   </div>
 
-  <div class="modal-overlay hidden" id="system-tools-modal">
+  <div class="modal-overlay hidden" id="system-prompt-modal">
     <div class="modal modal-lg">
-      <div class="modal-title">System Prompt & Tools</div>
+      <div class="modal-title">System Prompt</div>
       <div class="form-group">
-        <label for="system-prompt">System Prompt</label>
-        <textarea id="system-prompt" rows="6" placeholder="Describe desired model behavior..."></textarea>
+        <textarea id="system-prompt" rows="16" placeholder="Describe desired model behavior..."></textarea>
       </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="system-prompt-modal-close">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="tools-modal">
+    <div class="modal modal-lg">
+      <div class="modal-title">Tools</div>
       <div class="form-group">
-        <label for="tools">Tools <span class="hint-text">(JSON array)</span></label>
-        <textarea id="tools" class="json-editor" placeholder='[{"type": "function", "function": {...}}]'></textarea>
+        <label for="tools">Function definitions <span class="hint-text">(JSON array)</span></label>
+        <textarea id="tools" class="json-editor" rows="14"
+          placeholder='[{"type": "function", "function": {...}}]'></textarea>
         <div class="hint-buttons">
           <button type="button" class="hint-btn" data-tool="weather" title="Weather tool example">Weather</button>
           <button type="button" class="hint-btn" data-tool="calculator"
@@ -283,12 +300,52 @@
             Search</button>
         </div>
       </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="tools-modal-close">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="stop-modal">
+    <div class="modal modal-sm">
+      <div class="modal-title">Stop Sequences</div>
       <div class="form-group">
-        <label for="stop-sequences">Stop Sequences <span class="hint-text">(one per line)</span></label>
-        <textarea id="stop-sequences" rows="3" placeholder="###&#10;[END]"></textarea>
+        <label for="stop-sequences">One sequence per line</label>
+        <textarea id="stop-sequences" rows="6" placeholder="###&#10;[END]"></textarea>
       </div>
       <div class="modal-actions">
-        <button class="btn btn-primary" id="system-tools-modal-close">Done</button>
+        <button class="btn btn-primary" id="stop-modal-close">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="format-modal">
+    <div class="modal modal-lg">
+      <div class="modal-title">Response Format</div>
+      <div class="form-group">
+        <label for="structured-json">JSON Schema</label>
+        <textarea id="structured-json" class="json-editor" rows="20" placeholder='{
+  "type": "object",
+  "properties": {
+    "answer": { "type": "string" }
+  }
+}'></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="format-modal-close">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="extra-modal">
+    <div class="modal modal-lg">
+      <div class="modal-title">Extra Body</div>
+      <div class="form-group">
+        <label for="extra-body">JSON to merge into request</label>
+        <textarea id="extra-body" class="json-editor" rows="20" placeholder='{"custom_field": "value"}'></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" id="extra-modal-close">Done</button>
       </div>
     </div>
   </div>
@@ -309,13 +366,13 @@
             <button type="button" class="hint-btn" data-endpoint="https://api.openai.com/v1/chat/completions"
               data-target="provider-endpoint" title="OpenAI">OpenAI</button>
             <button type="button" class="hint-btn"
-              data-endpoint="https://generativelanguage.googleapis.com/v1beta/models" data-target="provider-endpoint"
+              data-endpoint="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" data-target="provider-endpoint"
               title="Google">Google</button>
-            <button type="button" class="hint-btn" data-endpoint="https://api.anthropic.com/v1/messages"
+            <button type="button" class="hint-btn" data-endpoint="https://api.anthropic.com/v1/chat/completions"
               data-target="provider-endpoint" title="Anthropic">Anthropic</button>
             <button type="button" class="hint-btn" data-endpoint="https://openrouter.ai/api/v1/chat/completions"
               data-target="provider-endpoint" title="OpenRouter">OpenRouter</button>
-            <button type="button" class="hint-btn" data-endpoint="https://api-inference.huggingface.co/models"
+            <button type="button" class="hint-btn" data-endpoint="https://router.huggingface.co/v1/chat/completions"
               data-target="provider-endpoint" title="HuggingFace">HuggingFace</button>
             <button type="button" class="hint-btn" data-endpoint="https://api.groq.com/openai/v1/chat/completions"
               data-target="provider-endpoint" title="Groq">Groq</button>
