@@ -4,6 +4,7 @@ import type { ChatMessage, MessageSegment, FileAttachment, ToolCall, ModelConfig
 import { saveModelConfig, getDefaultModelConfig, saveInferenceConfig, getDefaultInferenceConfig, saveChat, getAllChats, deleteChat, saveProvider, getAllProviders, deleteProvider } from './storage/db';
 import { buildRequest, streamChat } from './api/chat-client';
 import { listModels, type Model } from './api/models-client';
+import { generateCurlCommand, parseCurlCommand, importFromCurl } from './api/curl-utils';
 import { marked } from 'marked';
 
 const DEFAULT_MODEL_ID = 'default';
@@ -96,6 +97,28 @@ const providerNameInput = $<HTMLInputElement>('provider-name');
 const providerEndpointInput = $<HTMLInputElement>('provider-endpoint');
 const providerModelInput = $<HTMLInputElement>('provider-model');
 const providerApikeyInput = $<HTMLInputElement>('provider-apikey');
+const systemToolsBtn = $<HTMLButtonElement>('system-tools-btn');
+const systemToolsModal = $<HTMLDivElement>('system-tools-modal');
+const systemToolsModalClose = $<HTMLButtonElement>('system-tools-modal-close');
+const systemPromptPreview = $<HTMLSpanElement>('system-prompt-preview');
+const toolsPreview = $<HTMLSpanElement>('tools-preview');
+const stopSequencesPreview = $<HTMLSpanElement>('stop-sequences-preview');
+const viewCodeBtn = $<HTMLButtonElement>('view-code-btn');
+const viewCodeModal = $<HTMLDivElement>('view-code-modal');
+const viewCodeModalCancel = $<HTMLButtonElement>('view-code-modal-cancel');
+const embedApiKeyCheckbox = $<HTMLInputElement>('embed-api-key');
+const curlCodeOutput = $<HTMLPreElement>('curl-code-output');
+const copyCurlBtn = $<HTMLButtonElement>('copy-curl-btn');
+const importCurlBtn = $<HTMLButtonElement>('import-curl-btn');
+const importCurlModal = $<HTMLDivElement>('import-curl-modal');
+const importCurlModalCancel = $<HTMLButtonElement>('import-curl-modal-cancel');
+const curlInput = $<HTMLTextAreaElement>('curl-input');
+const importPreview = $<HTMLDivElement>('import-preview');
+const importPreviewContent = $<HTMLDivElement>('import-preview-content');
+const importCurlSubmitBtn = $<HTMLButtonElement>('import-curl-btn-submit');
+
+const showModal = (el: HTMLElement) => el.classList.remove('hidden');
+const hideModal = (el: HTMLElement) => el.classList.add('hidden');
 
 function getCurrentChat(): Chat | null {
   const chat = chats.find(c => c.id === currentChatId) || null;
@@ -146,15 +169,15 @@ async function init() {
     temperatureInput.value = String(savedInference.temperature ?? 1);
     temperatureInput.disabled = !savedInference.temperatureEnabled;
     tempValueSpan.textContent = (savedInference.temperature ?? 1).toFixed(1);
-    
+
     topKInput.value = String(savedInference.top_k ?? 0);
     topKValueSpan.textContent = String(savedInference.top_k ?? 0);
-    
+
     topPInput.value = String(savedInference.top_p ?? 0);
     topPValueSpan.textContent = (savedInference.top_p ?? 0).toFixed(2);
-    
+
     stopSequencesInput.value = savedInference.stop?.join('\n') ?? '';
-    
+
     reasoningSelect.value = savedInference.reasoningEffort;
     maxTokensInput.value = savedInference.maxCompletionTokens ? String(savedInference.maxCompletionTokens) : '';
     toolsInput.value = savedInference.tools;
@@ -171,6 +194,7 @@ async function init() {
   renderTabs();
   renderMessages();
   updateModelDisplay();
+  updateSystemToolsPreview();
   setupEventListeners();
 }
 
@@ -238,8 +262,17 @@ async function switchToChat(chatId: string) {
 }
 
 async function closeTab(chatId: string) {
-  if (chats.length <= 1) return;
   if (isStreaming) return;
+
+  if (chats.length <= 1) {
+    await deleteChat(chatId);
+    chats = [];
+    await createNewChat();
+    renderTabs();
+    messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
+    renderMessages();
+    return;
+  }
 
   await deleteChat(chatId);
   chats = chats.filter(c => c.id !== chatId);
@@ -313,26 +346,43 @@ function setupEventListeners() {
   userInput.addEventListener('paste', handlePaste);
   addTabBtn.addEventListener('click', addNewTab);
   listModelsBtn.addEventListener('click', openModelsModal);
-  modelsModalCancel.addEventListener('click', () => modelsModal.style.display = 'none');
+  modelsModalCancel.addEventListener('click', () => hideModal(modelsModal));
   themeToggleBtn.addEventListener('click', toggleTheme);
 
   providersBtn.addEventListener('click', openProvidersModal);
   providersModalCancel.addEventListener('click', closeProvidersModal);
   providerSaveBtn.addEventListener('click', saveOrUpdateProvider);
 
+  systemToolsBtn.addEventListener('click', () => showModal(systemToolsModal));
+  systemToolsModalClose.addEventListener('click', () => hideModal(systemToolsModal));
+
+  viewCodeBtn.addEventListener('click', openViewCodeModal);
+  viewCodeModalCancel.addEventListener('click', () => hideModal(viewCodeModal));
+  embedApiKeyCheckbox.addEventListener('change', updateCurlCode);
+  copyCurlBtn.addEventListener('click', copyCurlToClipboard);
+
+  importCurlBtn.addEventListener('click', openImportCurlModal);
+  importCurlModalCancel.addEventListener('click', () => {
+    hideModal(importCurlModal);
+    curlInput.value = '';
+    hideModal(importPreview);
+  });
+  curlInput.addEventListener('input', updateImportPreview);
+  importCurlSubmitBtn.addEventListener('click', importCurlCommand);
+
   // Initialize theme from localStorage
   const savedTheme = localStorage.getItem('theme') || 'dark';
   document.documentElement.dataset.theme = savedTheme;
 
   toolModalCancel.addEventListener('click', () => {
-    toolModal.style.display = 'none';
+    hideModal(toolModal);
     pendingToolCall = null;
   });
 
   toolModalSubmit.addEventListener('click', submitToolResponse);
 
   editModalCancel.addEventListener('click', () => {
-    editModal.style.display = 'none';
+    hideModal(editModal);
     editingMessageIndex = null;
   });
 
@@ -343,7 +393,7 @@ function setupEventListeners() {
       const target = e.target as HTMLButtonElement;
       const endpoint = target.dataset.endpoint;
       const tool = target.dataset.tool;
-      
+
       if (endpoint) {
         providerEndpointInput.value = endpoint;
       }
@@ -442,21 +492,60 @@ function saveInferenceConfigDebounced() {
     inferenceConfig.systemPrompt = systemPromptInput.value;
     inferenceConfig.temperatureEnabled = tempEnabledInput.checked;
     inferenceConfig.temperature = parseFloat(temperatureInput.value);
-    
+
     const topKValue = parseInt(topKInput.value, 10);
     inferenceConfig.top_k = topKValue > 0 ? topKValue : null;
-    
+
     const topPValue = parseFloat(topPInput.value);
     inferenceConfig.top_p = topPValue > 0 ? topPValue : null;
-    
+
     const stopSeq = stopSequencesInput.value.split('\n').filter(s => s.trim());
     inferenceConfig.stop = stopSeq.length > 0 ? stopSeq : [];
-    
+
     inferenceConfig.reasoningEffort = reasoningSelect.value as InferenceConfig['reasoningEffort'];
     inferenceConfig.maxCompletionTokens = maxTokensInput.value ? parseInt(maxTokensInput.value, 10) : null;
     inferenceConfig.tools = toolsInput.value;
     await saveInferenceConfig(inferenceConfig);
+    updateSystemToolsPreview();
   }, 500);
+}
+
+function updateSystemToolsPreview() {
+  const systemPromptValue = systemPromptInput.value.trim();
+  if (systemPromptValue) {
+    systemPromptPreview.textContent = systemPromptValue;
+    systemPromptPreview.classList.remove('empty');
+  } else {
+    systemPromptPreview.textContent = 'Not set';
+    systemPromptPreview.classList.add('empty');
+  }
+
+  const toolsValue = toolsInput.value.trim();
+  if (toolsValue) {
+    try {
+      const tools = JSON.parse(toolsValue);
+      const toolCount = Array.isArray(tools) ? tools.length : 1;
+      toolsPreview.textContent = `${toolCount} tool${toolCount !== 1 ? 's' : ''} configured`;
+      toolsPreview.classList.remove('empty');
+    } catch {
+      toolsPreview.textContent = 'Invalid JSON';
+      toolsPreview.classList.remove('empty');
+    }
+  } else {
+    toolsPreview.textContent = 'None';
+    toolsPreview.classList.add('empty');
+  }
+
+  const stopSeqValue = stopSequencesInput.value.trim();
+  if (stopSeqValue) {
+    const sequences = stopSeqValue.split('\n').filter(s => s.trim());
+    const count = sequences.length;
+    stopSequencesPreview.textContent = `${count} sequence${count !== 1 ? 's' : ''}: ${sequences.join(', ')}`;
+    stopSequencesPreview.classList.remove('empty');
+  } else {
+    stopSequencesPreview.textContent = 'None';
+    stopSequencesPreview.classList.add('empty');
+  }
 }
 
 function validateToolsJson() {
@@ -480,7 +569,7 @@ function updateModelDisplay() {
     modelDisplay.textContent = modelConfig.name;
     statusDot.classList.add('connected');
   } else {
-    modelDisplay.textContent = 'No model configured';
+    modelDisplay.textContent = 'No model';
     statusDot.classList.remove('connected');
   }
 }
@@ -488,7 +577,7 @@ function updateModelDisplay() {
 function renderMessages() {
   const chat = getCurrentChat();
   const hasMessages = chat && chat.messages.length > 0;
-  emptyState.style.display = hasMessages ? 'none' : 'flex';
+  hasMessages ? hideModal(emptyState) : showModal(emptyState);
 
   if (!hasMessages) {
     Array.from(messagesContainer.querySelectorAll('.message')).forEach(el => el.remove());
@@ -534,7 +623,7 @@ async function updateMessageContent(msgIndex: number, segments: MessageSegment[]
     const segment = segments[i];
     const isLastSegment = i === segments.length - 1;
     const isStreaming = isLastSegment && currentSegmentType === segment.type;
-    
+
     if (segment.type === 'reasoning') {
       html += `
         <details class="reasoning-block"${isStreaming ? ' open' : ''}>
@@ -560,7 +649,7 @@ async function updateMessageContent(msgIndex: number, segments: MessageSegment[]
 
 function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
   const div = document.createElement('div');
-  div.className = 'message';
+  div.className = `message ${msg.role}`;
   div.dataset.index = String(index);
 
   let actionsHtml = '';
@@ -590,7 +679,7 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
   }
 
   let contentHtml = '';
-  
+
   // Render segments if available (interleaved reasoning and content)
   if (msg.segments && msg.segments.length > 0) {
     for (const segment of msg.segments) {
@@ -628,9 +717,7 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
     }
   }
 
-  if (msg.role === 'assistant' && !msg.content && !msg.segments?.length && !msg.toolCalls?.length) {
-    contentHtml += `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
-  }
+
 
   const chat = getCurrentChat();
 
@@ -653,13 +740,14 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
       contentHtml += `
         <div class="tool-call" data-tool-id="${tc.id}">
           <div class="tool-call-header">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-            </svg>
+            <i class="ri-wrench-line"></i>
             <span class="tool-call-name">${escapeHtml(tc.function.name)}</span>
+            <span class="tool-call-id">${escapeHtml(tc.id)}</span>
           </div>
-          <pre class="tool-call-args">${escapeHtml(formatJson(tc.function.arguments))}</pre>
-          ${!hasResponse ? `<button class="btn btn-secondary btn-sm tool-response-btn" data-tool-id="${tc.id}" data-msg-index="${index}">Provide Response</button>` : ''}
+          <div class="tool-call-body">
+            <pre class="tool-call-args">${escapeHtml(formatJson(tc.function.arguments))}</pre>
+            ${!hasResponse ? `<button class="btn btn-secondary btn-sm tool-response-btn" data-tool-id="${tc.id}" data-msg-index="${index}"><i class="ri-reply-line"></i> Provide Response</button>` : ''}
+          </div>
         </div>
       `;
     }
@@ -667,15 +755,26 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
   }
 
   if (msg.role === 'tool' && msg.toolCallId) {
+    const linkedToolCall = chat?.messages.flatMap(m => m.toolCalls || []).find(tc => tc.id === msg.toolCallId);
+    const toolName = linkedToolCall?.function.name || 'unknown';
     contentHtml = `
-      <div class="tool-call">
-        <div class="tool-call-header">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>
+      <div class="tool-response" data-tool-call-id="${msg.toolCallId}">
+        <div class="tool-response-header">
+          <i class="ri-checkbox-circle-line"></i>
           <span>Tool Response</span>
+          <span class="tool-response-ref">
+            <i class="ri-arrow-right-s-line"></i>
+            <span class="tool-response-name">${escapeHtml(toolName)}</span>
+            <span class="tool-response-id">${escapeHtml(msg.toolCallId)}</span>
+          </span>
+          <button class="btn btn-icon btn-sm tool-edit-btn" title="Edit response">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+            </svg>
+          </button>
         </div>
-        <pre class="tool-call-args">${escapeHtml(msg.content || '')}</pre>
+        <div class="tool-response-content">${escapeHtml(msg.content || '')}</div>
       </div>
     `;
   }
@@ -744,6 +843,11 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
     });
   });
 
+  const toolEditBtn = div.querySelector('.tool-edit-btn');
+  if (toolEditBtn) {
+    toolEditBtn.addEventListener('click', () => openEditModal(index));
+  }
+
   return div;
 }
 
@@ -799,14 +903,14 @@ function openEditModal(index: number) {
   if (!chat) return;
   editingMessageIndex = index;
   editContent.value = chat.messages[index].content || '';
-  editModal.style.display = 'flex';
+  showModal(editModal);
 }
 
 function openToolModal(messageIndex: number, toolCall: ToolCall) {
   pendingToolCall = { messageIndex, toolCall };
   toolModalName.textContent = `Function: ${toolCall.function.name}`;
   toolResponse.value = '';
-  toolModal.style.display = 'flex';
+  showModal(toolModal);
 }
 
 async function submitEditedMessage() {
@@ -821,7 +925,7 @@ async function submitEditedMessage() {
   messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
   renderMessages();
 
-  editModal.style.display = 'none';
+  hideModal(editModal);
   editingMessageIndex = null;
 
   await sendToApi();
@@ -833,7 +937,7 @@ async function openModelsModal() {
     return;
   }
 
-  modelsModal.style.display = 'flex';
+  showModal(modelsModal);
   modelsList.innerHTML = '<div class="loading-indicator">Loading models...</div>';
 
   try {
@@ -871,10 +975,167 @@ function renderModelsList(models: Model[]) {
       modelConfig.name = model.id;
       saveModelConfigDebounced(); // Trigger save
       updateModelDisplay();
-      modelsModal.style.display = 'none';
+      hideModal(modelsModal);
     });
 
     modelsList.appendChild(div);
+  }
+}
+
+function openViewCodeModal() {
+  const chat = getCurrentChat();
+  if (!chat) return;
+
+  embedApiKeyCheckbox.checked = false;
+  updateCurlCode();
+  showModal(viewCodeModal);
+}
+
+function updateCurlCode() {
+  const chat = getCurrentChat();
+  if (!chat) return;
+
+  const request = buildRequest(modelConfig, inferenceConfig, chat.messages);
+  const curlCommand = generateCurlCommand(modelConfig, request, embedApiKeyCheckbox.checked);
+  curlCodeOutput.textContent = curlCommand;
+}
+
+async function copyCurlToClipboard() {
+  const code = curlCodeOutput.textContent || '';
+  try {
+    await navigator.clipboard.writeText(code);
+    const originalText = copyCurlBtn.innerHTML;
+    copyCurlBtn.innerHTML = '<i class="ri-check-line"></i> Copied!';
+    setTimeout(() => {
+      copyCurlBtn.innerHTML = originalText;
+    }, 2000);
+  } catch {
+    alert('Failed to copy to clipboard');
+  }
+}
+
+function openImportCurlModal() {
+  curlInput.value = '';
+  hideModal(importPreview);
+  showModal(importCurlModal);
+}
+
+function updateImportPreview() {
+  const value = curlInput.value.trim();
+  if (!value) {
+    hideModal(importPreview);
+    return;
+  }
+
+  try {
+    const parsed = parseCurlCommand(value);
+    const imported = importFromCurl(parsed);
+
+    let html = '';
+    html += `<div class="import-preview-item"><span class="import-preview-label">Endpoint:</span><span class="import-preview-value">${escapeHtml(imported.endpoint)}</span></div>`;
+    html += `<div class="import-preview-item"><span class="import-preview-label">Model:</span><span class="import-preview-value">${escapeHtml(imported.model || '(not specified)')}</span></div>`;
+    html += `<div class="import-preview-item"><span class="import-preview-label">API Key:</span><span class="import-preview-value">${imported.apiKey ? '••••••••' : '(not included)'}</span></div>`;
+    html += `<div class="import-preview-item"><span class="import-preview-label">Messages:</span><span class="import-preview-value">${imported.messages.length} message(s)</span></div>`;
+    if (imported.systemPrompt) {
+      const truncated = imported.systemPrompt.length > 100 ? imported.systemPrompt.slice(0, 100) + '...' : imported.systemPrompt;
+      html += `<div class="import-preview-item"><span class="import-preview-label">System:</span><span class="import-preview-value truncated">${escapeHtml(truncated)}</span></div>`;
+    }
+    if (imported.temperature !== undefined) {
+      html += `<div class="import-preview-item"><span class="import-preview-label">Temperature:</span><span class="import-preview-value">${imported.temperature}</span></div>`;
+    }
+    if (imported.tools) {
+      html += `<div class="import-preview-item"><span class="import-preview-label">Tools:</span><span class="import-preview-value">Included</span></div>`;
+    }
+
+    importPreviewContent.innerHTML = html;
+    showModal(importPreview);
+  } catch (e) {
+    importPreviewContent.innerHTML = `<div class="import-preview-item"><span class="import-preview-label" style="color: var(--error);">Error:</span><span class="import-preview-value">${escapeHtml((e as Error).message)}</span></div>`;
+    showModal(importPreview);
+  }
+}
+
+async function importCurlCommand() {
+  const value = curlInput.value.trim();
+  if (!value) return;
+
+  try {
+    const parsed = parseCurlCommand(value);
+    const imported = importFromCurl(parsed);
+
+    if (imported.endpoint) {
+      modelConfig.endpoint = imported.endpoint;
+      endpointInput.value = imported.endpoint;
+    }
+    if (imported.apiKey) {
+      modelConfig.apiKey = imported.apiKey;
+      apiKeyInput.value = imported.apiKey;
+    }
+    if (imported.model) {
+      modelConfig.name = imported.model;
+      modelNameInput.value = imported.model;
+    }
+    await saveModelConfig(modelConfig);
+    updateModelDisplay();
+
+    if (imported.systemPrompt) {
+      inferenceConfig.systemPrompt = imported.systemPrompt;
+      systemPromptInput.value = imported.systemPrompt;
+    }
+    if (imported.temperature !== undefined) {
+      inferenceConfig.temperature = imported.temperature;
+      inferenceConfig.temperatureEnabled = true;
+      temperatureInput.value = String(imported.temperature);
+      tempValueSpan.textContent = imported.temperature.toFixed(1);
+      tempEnabledInput.checked = true;
+      temperatureInput.disabled = false;
+    }
+    if (imported.topK !== undefined) {
+      inferenceConfig.top_k = imported.topK;
+      topKInput.value = String(imported.topK);
+      topKValueSpan.textContent = String(imported.topK);
+    }
+    if (imported.topP !== undefined) {
+      inferenceConfig.top_p = imported.topP;
+      topPInput.value = String(imported.topP);
+      topPValueSpan.textContent = imported.topP.toFixed(2);
+    }
+    if (imported.maxTokens !== undefined) {
+      inferenceConfig.maxCompletionTokens = imported.maxTokens;
+      maxTokensInput.value = String(imported.maxTokens);
+    }
+    if (imported.stop && imported.stop.length > 0) {
+      inferenceConfig.stop = imported.stop;
+      stopSequencesInput.value = imported.stop.join('\n');
+    }
+    if (imported.tools) {
+      inferenceConfig.tools = imported.tools;
+      toolsInput.value = imported.tools;
+    }
+    if (imported.reasoningEffort) {
+      inferenceConfig.reasoningEffort = imported.reasoningEffort as InferenceConfig['reasoningEffort'];
+      reasoningSelect.value = imported.reasoningEffort;
+    }
+    await saveInferenceConfig(inferenceConfig);
+    updateSystemToolsPreview();
+
+    if (imported.messages.length > 0) {
+      const chat = getCurrentChat();
+      if (chat) {
+        chat.messages = imported.messages;
+        chat.updatedAt = Date.now();
+        await saveChat(chat);
+        messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
+        renderMessages();
+      }
+    }
+
+    hideModal(importCurlModal);
+    curlInput.value = '';
+    hideModal(importPreview);
+
+  } catch (e) {
+    alert('Failed to import: ' + (e as Error).message);
   }
 }
 
@@ -882,7 +1143,7 @@ async function openProvidersModal() {
   providers = await getAllProviders();
   renderProvidersList();
   prefillProviderForm();
-  providersModal.style.display = 'flex';
+  showModal(providersModal);
 }
 
 function prefillProviderForm() {
@@ -904,7 +1165,7 @@ function prefillProviderForm() {
 }
 
 function closeProvidersModal() {
-  providersModal.style.display = 'none';
+  hideModal(providersModal);
   clearProviderForm();
 }
 
@@ -1040,7 +1301,7 @@ async function submitToolResponse() {
   await saveChat(chat);
   renderMessages();
 
-  toolModal.style.display = 'none';
+  hideModal(toolModal);
   pendingToolCall = null;
 
   await sendToApi();
@@ -1112,7 +1373,7 @@ async function handlePaste(e: ClipboardEvent) {
   if (!items) return;
 
   const files: File[] = [];
-  
+
   for (const item of Array.from(items)) {
     if (item.kind === 'file') {
       const file = item.getAsFile();
@@ -1188,8 +1449,8 @@ async function sendToApi() {
   isStreaming = true;
   abortController = new AbortController();
   setStatus('Streaming...', true);
-  sendBtn.style.display = 'none';
-  stopBtn.style.display = 'flex';
+  hideModal(sendBtn);
+  showModal(stopBtn);
 
   const assistantMsg: ChatMessage = {
     id: crypto.randomUUID(),
@@ -1239,7 +1500,7 @@ async function sendToApi() {
       if (reasoningChunk) {
         fullReasoning += reasoningChunk;
         chat.messages[msgIndex].reasoning = fullReasoning;
-        
+
         // Create new segment if switching from content to reasoning
         if (currentSegmentType === 'content' && fullContent) {
           segments.push({ type: 'content', text: fullContent });
@@ -1263,7 +1524,7 @@ async function sendToApi() {
           fullReasoning = '';
         }
         currentSegmentType = 'content';
-        
+
         fullContent += choice.delta.content;
         chat.messages[msgIndex].content = fullContent;
 
@@ -1400,8 +1661,8 @@ async function sendToApi() {
   isStreaming = false;
   abortController = null;
   setStatus('Ready', false);
-  sendBtn.style.display = 'flex';
-  stopBtn.style.display = 'none';
+  showModal(sendBtn);
+  hideModal(stopBtn);
 }
 
 function setStatus(text: string, streaming: boolean) {
