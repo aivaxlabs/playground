@@ -25,13 +25,13 @@ export interface ImportedConfig {
 
 function extractDataBody(text: string): { found: boolean; data: string; remaining: string } {
     const dataFlags = ['-d', '--data', '--data-raw', '--data-binary'];
-    
+
     for (const flag of dataFlags) {
         const flagIndex = text.indexOf(flag + ' ');
         if (flagIndex === -1) continue;
-        
+
         const afterFlag = text.slice(flagIndex + flag.length).trimStart();
-        
+
         if (afterFlag.startsWith("$'")) {
             const start = 2;
             let end = start;
@@ -51,7 +51,7 @@ function extractDataBody(text: string): { found: boolean; data: string; remainin
             const remaining = text.slice(0, flagIndex) + ' ' + afterFlag.slice(end + 1);
             return { found: true, data, remaining };
         }
-        
+
         const quoteChar = afterFlag[0];
         if (quoteChar === "'" || quoteChar === '"') {
             let end = 1;
@@ -71,7 +71,7 @@ function extractDataBody(text: string): { found: boolean; data: string; remainin
             const remaining = text.slice(0, flagIndex) + ' ' + afterFlag.slice(end + 1);
             return { found: true, data, remaining };
         }
-        
+
         const spaceIndex = afterFlag.indexOf(' ');
         if (spaceIndex === -1) {
             return { found: true, data: afterFlag, remaining: text.slice(0, flagIndex) };
@@ -80,7 +80,7 @@ function extractDataBody(text: string): { found: boolean; data: string; remainin
         const remaining = text.slice(0, flagIndex) + ' ' + afterFlag.slice(spaceIndex);
         return { found: true, data, remaining };
     }
-    
+
     return { found: false, data: '', remaining: text };
 }
 
