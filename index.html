@@ -5,7 +5,20 @@
   <meta charset="UTF-8" />
   <link rel="icon" type="image/svg+xml" href="/vite.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Chat Playground</title>
+  <title>AIVAX Playground</title>
+  <meta name="description"
+    content="Interactive AI chat playground for testing and experimenting with various language models. Supports OpenAI, Anthropic, and OpenRouter compatible APIs." />
+  <meta name="keywords"
+    content="AI, LLM, Chat, Playground, OpenAI, Anthropic, OpenRouter, Language Models, GPT, Claude" />
+  <meta name="author" content="AIVAX" />
+  <meta property="og:title" content="AIVAX Playground" />
+  <meta property="og:description"
+    content="Interactive AI chat playground for testing and experimenting with various language models." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="AIVAX Playground" />
+  <meta name="twitter:description"
+    content="Interactive AI chat playground for testing and experimenting with various language models." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -22,7 +35,7 @@
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
-          Chat Playground
+          AIVAX Playground
         </h1>
         <div class="header-actions">
           <button class="btn btn-icon btn-sm" id="theme-toggle-btn" title="Toggle theme">
@@ -187,9 +200,13 @@
             <span id="status-text">Ready</span>
           </div>
           <span class="model-badge" id="model-display">No model</span>
-          <button class="btn btn-ghost btn-sm" id="clear-chat" title="Clear chat">
+          <button class="btn btn-ghost btn-icon btn-sm" id="clear-chat" title="Clear chat">
             <i class="ri-delete-bin-line"></i>
           </button>
+          <a class="btn btn-ghost btn-icon btn-sm" href="https://github.com/aivaxlabs/playground"
+            rel="noopener noreferrer" target="_blank" title="GitHub Repository">
+            <i class="ri-github-fill"></i>
+          </a>
         </div>
       </header>
 
@@ -366,8 +383,8 @@
             <button type="button" class="hint-btn" data-endpoint="https://api.openai.com/v1/chat/completions"
               data-target="provider-endpoint" title="OpenAI">OpenAI</button>
             <button type="button" class="hint-btn"
-              data-endpoint="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" data-target="provider-endpoint"
-              title="Google">Google</button>
+              data-endpoint="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+              data-target="provider-endpoint" title="Google">Google</button>
             <button type="button" class="hint-btn" data-endpoint="https://api.anthropic.com/v1/chat/completions"
               data-target="provider-endpoint" title="Anthropic">Anthropic</button>
             <button type="button" class="hint-btn" data-endpoint="https://openrouter.ai/api/v1/chat/completions"
@@ -380,6 +397,8 @@
               data-target="provider-endpoint" title="Cerebras">Cerebras</button>
             <button type="button" class="hint-btn" data-endpoint="https://api.studio.nebius.ai/v1/chat/completions"
               data-target="provider-endpoint" title="Nebius">Nebius</button>
+            <button type="button" class="hint-btn" data-endpoint="https://api.naga.ac/v1/chat/completions"
+              data-target="provider-endpoint" title="NagaAI">NagaAI</button>
             <button type="button" class="hint-btn" data-endpoint="https://inference.aivax.net/v1/chat/completions"
               data-target="provider-endpoint" title="AIVAX">AIVAX</button>
           </div>

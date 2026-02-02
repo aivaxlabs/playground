@@ -567,6 +567,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    text-decoration: none;
     gap: 6px;
 }
 
@@ -1159,17 +1160,6 @@ body {
     color: var(--text-primary);
 }
 
-.json-editor {
-    font-family: 'Fira Code', 'Consolas', monospace;
-    font-size: 12px;
-    min-height: 120px;
-    tab-size: 2;
-}
-
-.json-editor.error {
-    border-color: var(--error);
-}
-
 /* Loading states */
 .loading-indicator {
     display: flex;
@@ -1530,6 +1520,17 @@ body {
     font-size: 11px;
     line-height: 1.5;
     tab-size: 2;
+}
+
+textarea.json-editor {
+    font-family: 'Fira Code', 'Consolas', monospace;
+    font-size: 12px;
+    min-height: 120px;
+    tab-size: 2;
+}
+
+textarea.json-editor.error {
+    border-color: var(--error);
 }
 
 /* Responsive */

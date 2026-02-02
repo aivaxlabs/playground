@@ -384,11 +384,19 @@ function setupEventListeners() {
   systemPromptBtn.addEventListener('click', () => showModal(systemPromptModal));
   systemPromptModalClose.addEventListener('click', () => hideModal(systemPromptModal));
   toolsBtn.addEventListener('click', () => showModal(toolsModal));
-  toolsModalClose.addEventListener('click', () => hideModal(toolsModal));
+  toolsModalClose.addEventListener('click', () => {
+    if (validateAndFormatJson(toolsInput)) {
+      hideModal(toolsModal);
+    }
+  });
   stopSeqBtn.addEventListener('click', () => showModal(stopSeqModal));
   stopSeqModalClose.addEventListener('click', () => hideModal(stopSeqModal));
   formatBtn.addEventListener('click', () => showModal(formatModal));
-  formatModalClose.addEventListener('click', () => hideModal(formatModal));
+  formatModalClose.addEventListener('click', () => {
+    if (validateAndFormatJson(structuredJsonInput)) {
+      hideModal(formatModal);
+    }
+  });
   extraBtn.addEventListener('click', () => showModal(extraModal));
   extraModalClose.addEventListener('click', () => {
     if (validateAndFormatJson(extraBodyInput)) {
