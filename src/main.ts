@@ -2,13 +2,14 @@ import './styles/main.css';
 import './styles/markdown-body.css';
 import type { ChatMessage, MessageSegment, FileAttachment, ToolCall, ModelConfig, InferenceConfig, Chat, TokenUsage, Provider } from './types';
 import { saveModelConfig, getDefaultModelConfig, saveInferenceConfig, getDefaultInferenceConfig, saveChat, getAllChats, deleteChat, saveProvider, getAllProviders, deleteProvider } from './storage/db';
-import { buildRequest, streamChat } from './api/chat-client';
+import { buildRequest, streamChat, type ChatRequest } from './api/chat-client';
 import { listModels, type Model } from './api/models-client';
 import { generateCurlCommand, parseCurlCommand, importFromCurl } from './api/curl-utils';
 import { marked } from 'marked';
 
 const DEFAULT_MODEL_ID = 'default';
 const DEFAULT_INFERENCE_ID = 'default';
+const THEME_STORAGE_KEY = 'theme';
 
 let modelConfig: ModelConfig = {
   id: DEFAULT_MODEL_ID,
@@ -63,13 +64,20 @@ const stopSequencesInput = $<HTMLTextAreaElement>('stop-sequences');
 const toolsInput = $<HTMLTextAreaElement>('tools');
 const structuredJsonInput = $<HTMLTextAreaElement>('structured-json');
 const extraBodyInput = $<HTMLTextAreaElement>('extra-body');
+const chatContainer = $<HTMLDivElement>('chat-container');
+const chatBody = $<HTMLDivElement>('chat-body');
 const messagesContainer = $<HTMLDivElement>('messages');
 const emptyState = $<HTMLDivElement>('empty-state');
 const userInput = $<HTMLTextAreaElement>('user-input');
 const sendBtn = $<HTMLButtonElement>('send-btn');
 const stopBtn = $<HTMLButtonElement>('stop-btn');
 const attachBtn = $<HTMLButtonElement>('attach-btn');
+const sampleMediaBtn = $<HTMLButtonElement>('sample-media-btn');
+const toggleDebugBtn = $<HTMLButtonElement>('toggle-debug');
 const clearBtn = $<HTMLButtonElement>('clear-chat');
+const debugPanel = $<HTMLElement>('debug-panel');
+const debugEntriesContainer = $<HTMLDivElement>('debug-entries');
+const debugClearBtn = $<HTMLButtonElement>('debug-clear');
 const resetParamsBtn = $<HTMLButtonElement>('reset-params-btn');
 const fileInput = $<HTMLInputElement>('file-input');
 const inputAttachments = $<HTMLDivElement>('input-attachments');
@@ -134,6 +142,68 @@ const curlInput = $<HTMLTextAreaElement>('curl-input');
 const importPreview = $<HTMLDivElement>('import-preview');
 const importPreviewContent = $<HTMLDivElement>('import-preview-content');
 const importCurlSubmitBtn = $<HTMLButtonElement>('import-curl-btn-submit');
+const sampleMediaModal = $<HTMLDivElement>('sample-media-modal');
+const sampleMediaList = $<HTMLDivElement>('sample-media-list');
+const sampleMediaModalClose = $<HTMLButtonElement>('sample-media-modal-close');
+
+interface SampleMediaItem {
+  id: string;
+  name: string;
+  type: string;
+  data: string;
+  description: string;
+  icon: string;
+}
+
+type DebugEntryType = 'request' | 'sse-chunk' | 'sse-done' | 'error';
+
+interface DebugEntry {
+  id: string;
+  type: DebugEntryType;
+  timestamp: number;
+  payload: unknown;
+}
+
+const DATA_URL_BASE64_REGEX = /^data:([^;,]+)(?:;charset=[^;,]+)?;base64,([A-Za-z0-9+/=\s]+)$/i;
+const BINARY_KEY_HINT_REGEX = /(data|file_data|image|video|audio|attachment|binary|blob|url)$/i;
+
+let debugEntries: DebugEntry[] = [];
+let isDebugPanelOpen = false;
+
+const SAMPLE_MEDIA_ITEMS: SampleMediaItem[] = [
+  {
+    id: 'sample-image',
+    name: 'sample-image.png',
+    type: 'image/png',
+    data: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2x9qQAAAAASUVORK5CYII=',
+    description: 'Example image for multimodal prompts.',
+    icon: 'ri-image-line'
+  },
+  {
+    id: 'sample-audio',
+    name: 'sample-audio.wav',
+    type: 'audio/wav',
+    data: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=',
+    description: 'Short WAV audio sample.',
+    icon: 'ri-volume-up-line'
+  },
+  {
+    id: 'sample-video',
+    name: 'sample-video.mp4',
+    type: 'video/mp4',
+    data: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAAAAGlzb20=',
+    description: 'Minimal MP4 header sample.',
+    icon: 'ri-movie-line'
+  },
+  {
+    id: 'sample-document',
+    name: 'sample-document.txt',
+    type: 'text/plain',
+    data: 'data:text/plain;base64,U2FtcGxlIGRvY3VtZW50IGZvciBtdWx0aW1vZGFsIHRlc3RzLg==',
+    description: 'Plain text document sample.',
+    icon: 'ri-file-text-line'
+  }
+];
 
 const showModal = (el: HTMLElement) => el.classList.remove('hidden');
 const hideModal = (el: HTMLElement) => el.classList.add('hidden');
@@ -181,26 +251,36 @@ async function init() {
 
   const savedInference = await getDefaultInferenceConfig();
   if (savedInference) {
-    inferenceConfig = savedInference;
-    systemPromptInput.value = savedInference.systemPrompt;
-    tempEnabledInput.checked = savedInference.temperatureEnabled;
-    temperatureInput.value = String(savedInference.temperature ?? 1);
-    temperatureInput.disabled = !savedInference.temperatureEnabled;
-    tempValueSpan.textContent = (savedInference.temperature ?? 1).toFixed(1);
+    inferenceConfig = {
+      ...inferenceConfig,
+      ...savedInference,
+      stop: Array.isArray(savedInference.stop) ? savedInference.stop : [],
+      tools: savedInference.tools ?? '',
+      structuredJson: savedInference.structuredJson ?? '',
+      extraBody: savedInference.extraBody ?? '',
+      reasoningEffort: savedInference.reasoningEffort ?? 'null',
+      temperatureEnabled: savedInference.temperatureEnabled ?? true
+    };
 
-    topKInput.value = String(savedInference.top_k ?? 0);
-    topKValueSpan.textContent = String(savedInference.top_k ?? 0);
+    systemPromptInput.value = inferenceConfig.systemPrompt;
+    tempEnabledInput.checked = inferenceConfig.temperatureEnabled;
+    temperatureInput.value = String(inferenceConfig.temperature ?? 1);
+    temperatureInput.disabled = !inferenceConfig.temperatureEnabled;
+    tempValueSpan.textContent = (inferenceConfig.temperature ?? 1).toFixed(1);
 
-    topPInput.value = String(savedInference.top_p ?? 0);
-    topPValueSpan.textContent = (savedInference.top_p ?? 0).toFixed(2);
+    topKInput.value = String(inferenceConfig.top_k ?? 0);
+    topKValueSpan.textContent = String(inferenceConfig.top_k ?? 0);
 
-    stopSequencesInput.value = savedInference.stop?.join('\n') ?? '';
+    topPInput.value = String(inferenceConfig.top_p ?? 0);
+    topPValueSpan.textContent = (inferenceConfig.top_p ?? 0).toFixed(2);
 
-    reasoningSelect.value = savedInference.reasoningEffort;
-    maxTokensInput.value = savedInference.maxCompletionTokens ? String(savedInference.maxCompletionTokens) : '';
-    toolsInput.value = savedInference.tools;
-    structuredJsonInput.value = savedInference.structuredJson ?? '';
-    extraBodyInput.value = savedInference.extraBody ?? '';
+    stopSequencesInput.value = inferenceConfig.stop.join('\n');
+
+    reasoningSelect.value = inferenceConfig.reasoningEffort;
+    maxTokensInput.value = inferenceConfig.maxCompletionTokens ? String(inferenceConfig.maxCompletionTokens) : '';
+    toolsInput.value = inferenceConfig.tools;
+    structuredJsonInput.value = inferenceConfig.structuredJson;
+    extraBodyInput.value = inferenceConfig.extraBody;
   }
 
   chats = await getAllChats();
@@ -273,6 +353,7 @@ async function switchToChat(chatId: string) {
   if (isStreaming) return;
 
   currentChatId = chatId;
+  clearDebugEntries();
   renderTabs();
   messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
   renderMessages();
@@ -288,6 +369,7 @@ async function closeTab(chatId: string) {
     await deleteChat(chatId);
     chats = [];
     await createNewChat();
+    clearDebugEntries();
     renderTabs();
     messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
     renderMessages();
@@ -299,6 +381,7 @@ async function closeTab(chatId: string) {
 
   if (currentChatId === chatId) {
     currentChatId = chats[0]?.id || null;
+    clearDebugEntries();
     messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
     renderMessages();
   }
@@ -310,9 +393,181 @@ async function addNewTab() {
   if (isStreaming) return;
 
   await createNewChat();
+  clearDebugEntries();
   renderTabs();
   messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
   renderMessages();
+}
+
+function setDebugPanelOpen(open: boolean) {
+  isDebugPanelOpen = open;
+  debugPanel.classList.toggle('hidden', !open);
+  chatContainer.classList.toggle('debug-open', open);
+  chatBody.classList.toggle('debug-open', open);
+  toggleDebugBtn.classList.toggle('active', open);
+
+  if (open) {
+    renderDebugEntries();
+  }
+}
+
+function clearDebugEntries() {
+  debugEntries = [];
+  debugEntriesContainer.innerHTML = '';
+}
+
+function renderDebugEntries() {
+  debugEntriesContainer.innerHTML = '';
+  for (const entry of debugEntries) {
+    debugEntriesContainer.appendChild(createDebugEntryElement(entry));
+  }
+  debugEntriesContainer.scrollTop = debugEntriesContainer.scrollHeight;
+}
+
+function addDebugEntry(type: DebugEntryType, payload: unknown) {
+  const shouldStickToBottom = isDebugScrolledToBottom();
+  const entry: DebugEntry = {
+    id: crypto.randomUUID(),
+    type,
+    timestamp: Date.now(),
+    payload: sanitizeDebugPayload(payload)
+  };
+
+  debugEntries.push(entry);
+
+  if (!isDebugPanelOpen) {
+    return;
+  }
+
+  debugEntriesContainer.appendChild(createDebugEntryElement(entry));
+  if (shouldStickToBottom) {
+    debugEntriesContainer.scrollTop = debugEntriesContainer.scrollHeight;
+  }
+}
+
+function isDebugScrolledToBottom(): boolean {
+  const threshold = 24;
+  const distanceToBottom = debugEntriesContainer.scrollHeight - debugEntriesContainer.scrollTop - debugEntriesContainer.clientHeight;
+  return distanceToBottom <= threshold;
+}
+
+function createDebugEntryElement(entry: DebugEntry): HTMLDivElement {
+  const div = document.createElement('div');
+  div.className = `debug-entry debug-entry--${entry.type}`;
+  div.dataset.id = entry.id;
+
+  const header = document.createElement('div');
+  header.className = 'debug-entry-header';
+
+  const badge = document.createElement('span');
+  badge.className = 'debug-entry-badge';
+  badge.textContent = getDebugTypeLabel(entry.type);
+
+  const timestamp = document.createElement('span');
+  timestamp.textContent = new Date(entry.timestamp).toLocaleTimeString('pt-BR', { hour12: false });
+
+  const payload = document.createElement('pre');
+  payload.textContent = stringifyDebugPayload(entry.payload);
+
+  header.appendChild(badge);
+  header.appendChild(timestamp);
+  div.appendChild(header);
+  div.appendChild(payload);
+
+  return div;
+}
+
+function getDebugTypeLabel(type: DebugEntryType): string {
+  if (type === 'request') return 'REQUEST';
+  if (type === 'sse-chunk') return 'SSE';
+  if (type === 'sse-done') return 'DONE';
+  return 'ERROR';
+}
+
+function stringifyDebugPayload(payload: unknown): string {
+  try {
+    return JSON.stringify(payload, null, 2) ?? String(payload);
+  } catch {
+    return String(payload);
+  }
+}
+
+function sanitizeDebugPayload(value: unknown, keyPath: string[] = []): unknown {
+  if (typeof value === 'string') {
+    return truncateBinaryString(value, keyPath) ?? value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item, index) => sanitizeDebugPayload(item, [...keyPath, String(index)]));
+  }
+
+  if (value && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(source)) {
+      sanitized[key] = sanitizeDebugPayload(nested, [...keyPath, key]);
+    }
+    return sanitized;
+  }
+
+  return value;
+}
+
+function truncateBinaryString(value: string, keyPath: string[]): string | null {
+  const dataUrlMatch = value.match(DATA_URL_BASE64_REGEX);
+  if (dataUrlMatch) {
+    const mimeType = dataUrlMatch[1].toLowerCase();
+    const base64 = dataUrlMatch[2].replace(/\s+/g, '');
+    const bytes = estimateBase64Bytes(base64);
+    return `[base64 ${mimeType}: ${formatBytes(bytes)} truncated]`;
+  }
+
+  const keyName = keyPath[keyPath.length - 1] ?? '';
+  if (!BINARY_KEY_HINT_REGEX.test(keyName)) {
+    return null;
+  }
+
+  const compactValue = value.replace(/\s+/g, '');
+  if (!looksLikeBase64(compactValue)) {
+    return null;
+  }
+
+  const bytes = estimateBase64Bytes(compactValue);
+  return `[base64 binary: ${formatBytes(bytes)} truncated]`;
+}
+
+function looksLikeBase64(value: string): boolean {
+  if (value.length < 300 || value.length % 4 !== 0) {
+    return false;
+  }
+
+  if (/[^A-Za-z0-9+/=]/.test(value)) {
+    return false;
+  }
+
+  const firstPadding = value.indexOf('=');
+  if (firstPadding === -1) {
+    return true;
+  }
+
+  return !/[^=]/.test(value.slice(firstPadding));
+}
+
+function estimateBase64Bytes(base64: string): number {
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes}B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)}KB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 function setupEventListeners() {
@@ -368,10 +623,23 @@ function setupEventListeners() {
   sendBtn.addEventListener('click', sendMessage);
   stopBtn.addEventListener('click', stopStreaming);
   attachBtn.addEventListener('click', () => fileInput.click());
+  sampleMediaBtn.addEventListener('click', openSampleMediaModal);
+  toggleDebugBtn.addEventListener('click', () => setDebugPanelOpen(!isDebugPanelOpen));
   clearBtn.addEventListener('click', clearChat);
+  debugClearBtn.addEventListener('click', clearDebugEntries);
   resetParamsBtn.addEventListener('click', resetParameters);
   fileInput.addEventListener('change', handleFileSelect);
   userInput.addEventListener('paste', handlePaste);
+  emptyState.querySelectorAll<HTMLButtonElement>('.empty-suggestion-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const prompt = btn.dataset.prompt;
+      if (!prompt) return;
+      userInput.value = prompt;
+      userInput.style.height = 'auto';
+      userInput.style.height = Math.min(userInput.scrollHeight, 200) + 'px';
+      userInput.focus();
+    });
+  });
   addTabBtn.addEventListener('click', addNewTab);
   listModelsBtn.addEventListener('click', openModelsModal);
   modelsModalCancel.addEventListener('click', () => hideModal(modelsModal));
@@ -418,9 +686,9 @@ function setupEventListeners() {
   curlInput.addEventListener('input', updateImportPreview);
   importCurlSubmitBtn.addEventListener('click', importCurlCommand);
 
-  // Initialize theme from localStorage
-  const savedTheme = localStorage.getItem('theme') || 'dark';
-  document.documentElement.dataset.theme = savedTheme;
+  sampleMediaModalClose.addEventListener('click', () => hideModal(sampleMediaModal));
+
+  initTheme();
 
   toolModalCancel.addEventListener('click', () => {
     hideModal(toolModal);
@@ -754,6 +1022,17 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
         </button>
       </div>
     `;
+  } else if (msg.role === 'assistant') {
+    actionsHtml = `
+      <div class="message-actions">
+        <button class="btn btn-icon btn-sm copy-btn" title="Copy message">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+        </button>
+      </div>
+    `;
   }
 
   let contentHtml = '';
@@ -804,6 +1083,10 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
     for (const att of msg.attachments) {
       if (att.type.startsWith('image/')) {
         contentHtml += `<div class="attachment"><img src="${att.data}" alt="${escapeHtml(att.name)}" /></div>`;
+      } else if (att.type.startsWith('audio/')) {
+        contentHtml += `<div class="attachment"><span>🎵 ${escapeHtml(att.name)}</span></div>`;
+      } else if (att.type.startsWith('video/')) {
+        contentHtml += `<div class="attachment"><span>🎬 ${escapeHtml(att.name)}</span></div>`;
       } else {
         contentHtml += `<div class="attachment"><span>📎 ${escapeHtml(att.name)}</span></div>`;
       }
@@ -872,26 +1155,23 @@ function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
     </details>
   ` : '';
 
+  const showRole = msg.role === 'tool';
+  const hasMeta = showRole || Boolean(actionsHtml);
+
   div.innerHTML = `
-    <div class="message-header">
-      <span class="message-role ${msg.role}">${msg.role}</span>
-      ${actionsHtml}
-      ${msg.role === 'assistant' ? `
-        <div class="message-actions">
-          <button class="btn btn-icon btn-sm copy-btn" title="Copy message">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-            </svg>
-          </button>
-        </div>
-      ` : ''}
+    ${hasMeta ? `
+      <div class="message-meta">
+        ${showRole ? `<span class="message-role ${msg.role}">${msg.role}</span>` : '<span class="message-meta-spacer"></span>'}
+        ${actionsHtml}
+      </div>
+    ` : ''}
+    <div class="message-card">
+      <div class="message-body">
+        ${reasoningHtml}
+        ${contentHtml}
+      </div>
+      ${msg.usage ? `<div class="token-usage"><span><i class="ri-arrow-down-line"></i>${msg.usage.promptTokens} in</span><span><i class="ri-arrow-up-line"></i>${msg.usage.completionTokens} out</span>${msg.usage.cachedTokens ? `<span><i class="ri-database-2-line"></i>${msg.usage.cachedTokens} cached</span>` : ''}${msg.usage.tokensPerSecond ? `<span><i class="ri-speed-line"></i>${msg.usage.tokensPerSecond.toFixed(1)} tok/s</span>` : ''}${msg.usage.responseTimeMs ? `<span><i class="ri-timer-line"></i>${(msg.usage.responseTimeMs / 1000).toFixed(2)}s</span>` : ''}</div>` : ''}
     </div>
-    <div class="message-body">
-      ${reasoningHtml}
-      ${contentHtml}
-    </div>
-    ${msg.usage ? `<div class="token-usage"><span><i class="ri-arrow-down-line"></i>${msg.usage.promptTokens} in</span><span><i class="ri-arrow-up-line"></i>${msg.usage.completionTokens} out</span>${msg.usage.cachedTokens ? `<span><i class="ri-database-2-line"></i>${msg.usage.cachedTokens} cached</span>` : ''}${msg.usage.tokensPerSecond ? `<span><i class="ri-speed-line"></i>${msg.usage.tokensPerSecond.toFixed(1)} tok/s</span>` : ''}${msg.usage.responseTimeMs ? `<span><i class="ri-timer-line"></i>${(msg.usage.responseTimeMs / 1000).toFixed(2)}s</span>` : ''}</div>` : ''}
   `;
 
   const editBtn = div.querySelector('.edit-btn');
@@ -1405,6 +1685,68 @@ async function handleFileSelect(e: Event) {
   fileInput.value = '';
 }
 
+function openSampleMediaModal() {
+  renderSampleMediaList();
+  showModal(sampleMediaModal);
+}
+
+function renderSampleMediaList() {
+  sampleMediaList.innerHTML = '';
+
+  for (const item of SAMPLE_MEDIA_ITEMS) {
+    const div = document.createElement('div');
+    div.className = 'sample-media-item';
+    div.innerHTML = `
+      <div class="sample-media-item-info">
+        <div class="sample-media-item-title">
+          <i class="${item.icon}"></i>
+          <span>${escapeHtml(item.name)}</span>
+        </div>
+        <div class="sample-media-item-desc">${escapeHtml(item.description)}</div>
+      </div>
+      <button class="btn btn-secondary btn-sm sample-media-add-btn" data-id="${item.id}">
+        <i class="ri-add-line"></i>
+        <span>Add</span>
+      </button>
+    `;
+
+    sampleMediaList.appendChild(div);
+  }
+
+  sampleMediaList.querySelectorAll<HTMLButtonElement>('.sample-media-add-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sampleId = btn.dataset.id;
+      if (!sampleId) return;
+      addSampleMediaAttachment(sampleId);
+    });
+  });
+}
+
+function addSampleMediaAttachment(sampleId: string) {
+  const sample = SAMPLE_MEDIA_ITEMS.find(item => item.id === sampleId);
+  if (!sample) return;
+
+  pendingAttachments.push({
+    id: crypto.randomUUID(),
+    name: sample.name,
+    type: sample.type,
+    data: sample.data,
+    size: getDataUrlByteSize(sample.data)
+  });
+
+  renderInputAttachments();
+}
+
+function getDataUrlByteSize(dataUrl: string): number {
+  const base64 = dataUrl.includes(',') ? (dataUrl.split(',')[1] || '') : dataUrl;
+
+  try {
+    return atob(base64).length;
+  } catch {
+    return 0;
+  }
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1425,6 +1767,16 @@ function renderInputAttachments() {
       div.innerHTML = `
         <img src="${att.data}" alt="${escapeHtml(att.name)}" />
         <span>${escapeHtml(att.name)}</span>
+        <button class="input-attachment-remove" data-id="${att.id}">×</button>
+      `;
+    } else if (att.type.startsWith('audio/')) {
+      div.innerHTML = `
+        <span>🎵 ${escapeHtml(att.name)}</span>
+        <button class="input-attachment-remove" data-id="${att.id}">×</button>
+      `;
+    } else if (att.type.startsWith('video/')) {
+      div.innerHTML = `
+        <span>🎬 ${escapeHtml(att.name)}</span>
         <button class="input-attachment-remove" data-id="${att.id}">×</button>
       `;
     } else {
@@ -1561,7 +1913,8 @@ async function sendToApi() {
   showStreamingSpinner();
 
   try {
-    const request = buildRequest(modelConfig, inferenceConfig, chat.messages.slice(0, -1));
+    const request: ChatRequest = buildRequest(modelConfig, inferenceConfig, chat.messages.slice(0, -1));
+    addDebugEntry('request', request);
     let fullContent = '';
     let fullReasoning = '';
     const segments: MessageSegment[] = [];
@@ -1570,6 +1923,7 @@ async function sendToApi() {
     const startTime = performance.now();
 
     for await (const event of streamChat(modelConfig, request, abortController!.signal)) {
+      addDebugEntry('sse-chunk', event);
       const choice = event.choices[0];
       if (!choice) continue;
 
@@ -1655,6 +2009,8 @@ async function sendToApi() {
       }
     }
 
+    addDebugEntry('sse-done', { status: 'completed' });
+
     // Finalize last segment
     if (currentSegmentType === 'content' && fullContent) {
       segments.push({ type: 'content', text: fullContent });
@@ -1727,11 +2083,13 @@ async function sendToApi() {
   } catch (err) {
     hideStreamingSpinner();
     if (err instanceof Error && err.name === 'AbortError') {
+      addDebugEntry('error', { type: 'abort', message: 'Interrupted by user' });
       chat.messages[msgIndex].content = (chat.messages[msgIndex].content || '') + ' [Interrupted by user]';
       await saveChat(chat);
       messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
       renderMessages();
     } else {
+      addDebugEntry('error', { message: err instanceof Error ? err.message : 'Unknown error' });
       chat.messages.pop();
       await saveChat(chat);
       messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
@@ -1780,7 +2138,12 @@ function resetParameters() {
   maxTokensInput.value = '';
   stopSequencesInput.value = '';
   toolsInput.value = '';
+  structuredJsonInput.value = '';
+  extraBodyInput.value = '';
   toolsInput.classList.remove('error');
+  structuredJsonInput.classList.remove('error');
+  extraBodyInput.classList.remove('error');
+  updateConfigDots();
   saveInferenceConfigDebounced();
 }
 
@@ -1792,6 +2155,7 @@ async function clearChat() {
   chat.title = 'New Chat';
   chat.updatedAt = Date.now();
   await saveChat(chat);
+  clearDebugEntries();
   messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
   renderMessages();
   renderTabs();
@@ -1804,10 +2168,39 @@ function stopStreaming() {
 }
 
 function toggleTheme() {
-  const current = document.documentElement.dataset.theme || 'dark';
+  const current = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
   const next = current === 'dark' ? 'light' : 'dark';
-  document.documentElement.dataset.theme = next;
-  localStorage.setItem('theme', next);
+  applyTheme(next);
+  localStorage.setItem(THEME_STORAGE_KEY, next);
+}
+
+function applyTheme(theme: 'dark' | 'light') {
+  document.documentElement.dataset.theme = theme;
+}
+
+function getSavedTheme(): 'dark' | 'light' | null {
+  const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+  if (savedTheme === 'dark' || savedTheme === 'light') {
+    return savedTheme;
+  }
+  return null;
+}
+
+function getBrowserPreferredTheme(): 'dark' | 'light' {
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function initTheme() {
+  const savedTheme = getSavedTheme();
+  applyTheme(savedTheme ?? getBrowserPreferredTheme());
+
+  const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  mediaQuery.addEventListener('change', (event) => {
+    if (getSavedTheme()) {
+      return;
+    }
+    applyTheme(event.matches ? 'dark' : 'light');
+  });
 }
 
 init();

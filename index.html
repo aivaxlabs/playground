@@ -200,6 +200,9 @@
             <span id="status-text">Ready</span>
           </div>
           <span class="model-badge" id="model-display">No model</span>
+          <button class="btn btn-ghost btn-icon btn-sm" id="toggle-debug" title="Debug panel">
+            <i class="ri-bug-line"></i>
+          </button>
           <button class="btn btn-ghost btn-icon btn-sm" id="clear-chat" title="Clear chat">
             <i class="ri-delete-bin-line"></i>
           </button>
@@ -210,14 +213,37 @@
         </div>
       </header>
 
-      <div class="chat-container">
-        <div class="messages" id="messages">
-          <div class="empty-state" id="empty-state">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            <p>Your conversation will appear here</p>
+      <div class="chat-container" id="chat-container">
+        <div class="chat-body" id="chat-body">
+          <div class="messages" id="messages">
+            <div class="empty-state" id="empty-state">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <p>Your conversation will appear here</p>
+              <div class="empty-suggestions">
+                <button type="button" class="empty-suggestion-btn" data-prompt="What's bigger? 9,8 or 9,11?">What's
+                  bigger? 9,8 or 9,11?</button>
+                <button type="button" class="empty-suggestion-btn" data-prompt="Summarize this PDF briefly.">Summarize
+                  this PDF briefly.</button>
+                <button type="button" class="empty-suggestion-btn"
+                  data-prompt="Tell me what is said in this audio.">Tell
+                  me what is said in this audio.</button>
+                <button type="button" class="empty-suggestion-btn"
+                  data-prompt="Describe this image in one sentence.">Describe this image in one sentence.</button>
+              </div>
+            </div>
           </div>
+
+          <aside class="debug-panel hidden" id="debug-panel">
+            <div class="debug-panel-header">
+              <span>Debug</span>
+              <button class="btn btn-ghost btn-icon btn-sm" id="debug-clear" title="Clear debug entries">
+                <i class="ri-delete-bin-line"></i>
+              </button>
+            </div>
+            <div class="debug-entries" id="debug-entries"></div>
+          </aside>
         </div>
 
         <div class="input-area">
@@ -228,6 +254,10 @@
               <div class="input-actions">
                 <button class="btn btn-icon btn-sm" id="attach-btn" title="Attach file">
                   <i class="ri-attachment-2"></i>
+                </button>
+                <button class="btn btn-secondary btn-sm" id="sample-media-btn" title="Sample media">
+                  <i class="ri-gallery-line"></i>
+                  <span>Sample media</span>
                 </button>
                 <button class="btn btn-primary" id="send-btn">
                   <i class="ri-send-plane-fill"></i>
@@ -245,7 +275,18 @@
     </main>
   </div>
 
-  <input type="file" id="file-input" class="hidden" multiple accept="image/*,audio/*,.pdf,.txt,.md,.json" />
+  <input type="file" id="file-input" class="hidden" multiple
+    accept="image/*,video/*,audio/*,.pdf,.txt,.md,.json,.csv,.xml,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip" />
+
+  <div class="modal-overlay hidden" id="sample-media-modal">
+    <div class="modal modal-md">
+      <div class="modal-title">Sample media</div>
+      <div class="sample-media-list" id="sample-media-list"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" id="sample-media-modal-close">Close</button>
+      </div>
+    </div>
+  </div>
 
   <div class="modal-overlay hidden" id="tool-modal">
     <div class="modal">

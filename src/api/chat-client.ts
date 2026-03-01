@@ -1,4 +1,17 @@
-import type { ChatMessage, StreamEvent, ToolCall, ModelConfig, InferenceConfig } from '../types';
+import type { ChatMessage, StreamEvent, ToolCall, ModelConfig, InferenceConfig, FileAttachment } from '../types';
+
+type ChatContentPart =
+    | { type: 'text'; text: string }
+    | { type: 'image_url'; image_url: { url: string } }
+    | { type: 'file'; file: { filename: string; file_data: string } }
+    | { type: 'input_audio'; input_audio: { data: string; format: string } };
+
+interface ChatRequestMessage {
+    role: string;
+    content: string | ChatContentPart[] | null;
+    tool_calls?: ToolCall[];
+    tool_call_id?: string;
+}
 
 function deepMerge<T extends Record<string, unknown>>(target: T, source: Record<string, unknown>): T {
     const result = { ...target };
@@ -22,12 +35,7 @@ function deepMerge<T extends Record<string, unknown>>(target: T, source: Record<
 
 export interface ChatRequest {
     model: string;
-    messages: {
-        role: string;
-        content: string | { type: string; text?: string; image_url?: { url: string } }[] | null;
-        tool_calls?: ToolCall[];
-        tool_call_id?: string;
-    }[];
+    messages: ChatRequestMessage[];
     stream: boolean;
     temperature?: number;
     top_k?: number;
@@ -40,42 +48,90 @@ export interface ChatRequest {
     [key: string]: unknown;
 }
 
+function extractMimeTypeFromDataUrl(dataUrl: string): string | null {
+    const match = dataUrl.match(/^data:([^;]+);base64,/i);
+    return match?.[1]?.toLowerCase() ?? null;
+}
+
+function extractBase64FromDataUrl(dataUrl: string): string {
+    const commaIndex = dataUrl.indexOf(',');
+    return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+}
+
+function getAudioFormat(att: FileAttachment, mimeType: string): string {
+    if (mimeType.startsWith('audio/')) {
+        return mimeType.split('/')[1].split(';')[0].toLowerCase();
+    }
+
+    const ext = att.name.split('.').pop()?.toLowerCase();
+    return ext || 'wav';
+}
+
+function buildAttachmentPart(att: FileAttachment): ChatContentPart {
+    const mimeType = (att.type || extractMimeTypeFromDataUrl(att.data) || '').toLowerCase();
+
+    if (mimeType.startsWith('image/')) {
+        return {
+            type: 'image_url',
+            image_url: { url: att.data }
+        };
+    }
+
+    if (mimeType.startsWith('audio/')) {
+        return {
+            type: 'input_audio',
+            input_audio: {
+                data: extractBase64FromDataUrl(att.data),
+                format: getAudioFormat(att, mimeType)
+            }
+        };
+    }
+
+    return {
+        type: 'file',
+        file: {
+            filename: att.name || 'attachment',
+            file_data: att.data
+        }
+    };
+}
+
 export function buildRequest(
     modelConfig: ModelConfig,
     inferenceConfig: InferenceConfig,
     messages: ChatMessage[]
 ): ChatRequest {
     const reqMessages: ChatRequest['messages'] = [];
+    const systemPrompt = inferenceConfig.systemPrompt ?? '';
+    const stopSequences = Array.isArray(inferenceConfig.stop) ? inferenceConfig.stop : [];
+    const toolsJson = inferenceConfig.tools ?? '';
+    const structuredJson = inferenceConfig.structuredJson ?? '';
+    const extraBody = inferenceConfig.extraBody ?? '';
 
-    if (inferenceConfig.systemPrompt.trim()) {
+    if (systemPrompt.trim()) {
         reqMessages.push({
             role: 'system',
-            content: inferenceConfig.systemPrompt
+            content: systemPrompt
         });
     }
 
     for (const msg of messages) {
         if (msg.role === 'system') continue;
 
-        const reqMsg: ChatRequest['messages'][0] = {
+        const reqMsg: ChatRequestMessage = {
             role: msg.role,
             content: msg.content
         };
 
         if (msg.attachments && msg.attachments.length > 0 && msg.role === 'user') {
-            const parts: { type: string; text?: string; image_url?: { url: string } }[] = [];
+            const parts: ChatContentPart[] = [];
 
             if (msg.content) {
                 parts.push({ type: 'text', text: msg.content });
             }
 
             for (const att of msg.attachments) {
-                if (att.type.startsWith('image/')) {
-                    parts.push({
-                        type: 'image_url',
-                        image_url: { url: att.data }
-                    });
-                }
+                parts.push(buildAttachmentPart(att));
             }
 
             reqMsg.content = parts;
@@ -110,13 +166,13 @@ export function buildRequest(
         request.top_p = inferenceConfig.top_p;
     }
 
-    if (inferenceConfig.stop.length > 0) {
-        request.stop = inferenceConfig.stop;
+    if (stopSequences.length > 0) {
+        request.stop = stopSequences;
     }
 
-    if (inferenceConfig.tools.trim()) {
+    if (toolsJson.trim()) {
         try {
-            request.tools = JSON.parse(inferenceConfig.tools);
+            request.tools = JSON.parse(toolsJson);
         } catch { }
     }
 
@@ -128,9 +184,9 @@ export function buildRequest(
         request.reasoning_effort = inferenceConfig.reasoningEffort;
     }
 
-    if (inferenceConfig.structuredJson?.trim()) {
+    if (structuredJson.trim()) {
         try {
-            const schema = JSON.parse(inferenceConfig.structuredJson);
+            const schema = JSON.parse(structuredJson);
             request.response_format = {
                 type: 'json_schema',
                 json_schema: {
@@ -141,9 +197,9 @@ export function buildRequest(
         } catch { }
     }
 
-    if (inferenceConfig.extraBody?.trim()) {
+    if (extraBody.trim()) {
         try {
-            const extra = JSON.parse(inferenceConfig.extraBody);
+            const extra = JSON.parse(extraBody);
             return deepMerge(request, extra);
         } catch { }
     }
