@@ -1,2206 +1,1937 @@
-import './styles/main.css';
-import './styles/markdown-body.css';
-import type { ChatMessage, MessageSegment, FileAttachment, ToolCall, ModelConfig, InferenceConfig, Chat, TokenUsage, Provider } from './types';
-import { saveModelConfig, getDefaultModelConfig, saveInferenceConfig, getDefaultInferenceConfig, saveChat, getAllChats, deleteChat, saveProvider, getAllProviders, deleteProvider } from './storage/db';
-import { buildRequest, streamChat, type ChatRequest } from './api/chat-client';
-import { listModels, type Model } from './api/models-client';
-import { generateCurlCommand, parseCurlCommand, importFromCurl } from './api/curl-utils';
-import { marked } from 'marked';
+import el from "@cypherpotato/el";
+import { createTab, normalizeReasoningEffort, normalizeTabConfig, uid } from './types';
+import type { Tab, ChatMessage, Attachment, TabConfig, MessageMetrics, AssistantMessagePart, ToolCall } from './types';
+import { saveState, loadState } from './storage';
+import { streamChat } from './api';
+import { renderMarkdown } from './markdown';
+import './styles/app.css';
 
-const DEFAULT_MODEL_ID = 'default';
-const DEFAULT_INFERENCE_ID = 'default';
-const THEME_STORAGE_KEY = 'theme';
-
-let modelConfig: ModelConfig = {
-  id: DEFAULT_MODEL_ID,
-  name: '',
-  endpoint: '',
-  apiKey: '',
-  createdAt: Date.now()
-};
-
-let inferenceConfig: InferenceConfig = {
-  id: DEFAULT_INFERENCE_ID,
-  systemPrompt: '',
-  temperature: 1,
-  temperatureEnabled: true,
-  top_k: null,
-  top_p: null,
-  stop: [],
-  maxCompletionTokens: null,
-  tools: '',
-  reasoningEffort: 'null',
-  structuredJson: '',
-  extraBody: ''
-};
-
-let chats: Chat[] = [];
-let currentChatId: string | null = null;
-let providers: Provider[] = [];
-let editingProviderId: string | null = null;
-
-let pendingAttachments: FileAttachment[] = [];
-let isStreaming = false;
-let editingMessageIndex: number | null = null;
-let pendingToolCall: { messageIndex: number; toolCall: ToolCall } | null = null;
-let abortController: AbortController | null = null;
-
-const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-
-const modelNameInput = $<HTMLInputElement>('model-name');
-const endpointInput = $<HTMLInputElement>('endpoint');
-const apiKeyInput = $<HTMLInputElement>('api-key');
-const systemPromptInput = $<HTMLTextAreaElement>('system-prompt');
-const tempEnabledInput = $<HTMLInputElement>('temp-enabled');
-const temperatureInput = $<HTMLInputElement>('temperature');
-const tempValueSpan = $<HTMLSpanElement>('temp-value');
-const topKInput = $<HTMLInputElement>('top-k');
-const topKValueSpan = $<HTMLSpanElement>('top-k-value');
-const topPInput = $<HTMLInputElement>('top-p');
-const topPValueSpan = $<HTMLSpanElement>('top-p-value');
-const reasoningSelect = $<HTMLSelectElement>('reasoning-effort');
-const maxTokensInput = $<HTMLInputElement>('max-tokens');
-const stopSequencesInput = $<HTMLTextAreaElement>('stop-sequences');
-const toolsInput = $<HTMLTextAreaElement>('tools');
-const structuredJsonInput = $<HTMLTextAreaElement>('structured-json');
-const extraBodyInput = $<HTMLTextAreaElement>('extra-body');
-const chatContainer = $<HTMLDivElement>('chat-container');
-const chatBody = $<HTMLDivElement>('chat-body');
-const messagesContainer = $<HTMLDivElement>('messages');
-const emptyState = $<HTMLDivElement>('empty-state');
-const userInput = $<HTMLTextAreaElement>('user-input');
-const sendBtn = $<HTMLButtonElement>('send-btn');
-const stopBtn = $<HTMLButtonElement>('stop-btn');
-const attachBtn = $<HTMLButtonElement>('attach-btn');
-const sampleMediaBtn = $<HTMLButtonElement>('sample-media-btn');
-const toggleDebugBtn = $<HTMLButtonElement>('toggle-debug');
-const clearBtn = $<HTMLButtonElement>('clear-chat');
-const debugPanel = $<HTMLElement>('debug-panel');
-const debugEntriesContainer = $<HTMLDivElement>('debug-entries');
-const debugClearBtn = $<HTMLButtonElement>('debug-clear');
-const resetParamsBtn = $<HTMLButtonElement>('reset-params-btn');
-const fileInput = $<HTMLInputElement>('file-input');
-const inputAttachments = $<HTMLDivElement>('input-attachments');
-const statusDot = $<HTMLSpanElement>('status-dot');
-const statusText = $<HTMLSpanElement>('status-text');
-const modelDisplay = $<HTMLSpanElement>('model-display');
-const toolModal = $<HTMLDivElement>('tool-modal');
-const toolModalName = $<HTMLLabelElement>('tool-modal-name');
-const toolResponse = $<HTMLTextAreaElement>('tool-response');
-const toolModalCancel = $<HTMLButtonElement>('tool-modal-cancel');
-const toolModalSubmit = $<HTMLButtonElement>('tool-modal-submit');
-const editModal = $<HTMLDivElement>('edit-modal');
-const editContent = $<HTMLTextAreaElement>('edit-content');
-const editModalCancel = $<HTMLButtonElement>('edit-modal-cancel');
-const editModalSubmit = $<HTMLButtonElement>('edit-modal-submit');
-const tabsContainer = $<HTMLDivElement>('tabs-container');
-const addTabBtn = $<HTMLButtonElement>('add-tab-btn');
-const listModelsBtn = $<HTMLButtonElement>('list-models-btn');
-const modelsModal = $<HTMLDivElement>('models-modal');
-const modelsList = $<HTMLDivElement>('models-list');
-const modelsModalCancel = $<HTMLButtonElement>('models-modal-cancel');
-const themeToggleBtn = $<HTMLButtonElement>('theme-toggle-btn');
-const providersBtn = $<HTMLButtonElement>('providers-btn');
-const providersModal = $<HTMLDivElement>('providers-modal');
-const providersList = $<HTMLDivElement>('providers-list');
-const providersModalCancel = $<HTMLButtonElement>('providers-modal-cancel');
-const providerSaveBtn = $<HTMLButtonElement>('provider-save-btn');
-const providerNameInput = $<HTMLInputElement>('provider-name');
-const providerEndpointInput = $<HTMLInputElement>('provider-endpoint');
-const providerModelInput = $<HTMLInputElement>('provider-model');
-const providerApikeyInput = $<HTMLInputElement>('provider-apikey');
-const systemPromptBtn = $<HTMLButtonElement>('system-prompt-btn');
-const systemPromptModal = $<HTMLDivElement>('system-prompt-modal');
-const systemPromptModalClose = $<HTMLButtonElement>('system-prompt-modal-close');
-const promptDot = $<HTMLSpanElement>('prompt-dot');
-const toolsBtn = $<HTMLButtonElement>('tools-btn');
-const toolsModal = $<HTMLDivElement>('tools-modal');
-const toolsModalClose = $<HTMLButtonElement>('tools-modal-close');
-const toolsDot = $<HTMLSpanElement>('tools-dot');
-const stopSeqBtn = $<HTMLButtonElement>('stop-btn');
-const stopSeqModal = $<HTMLDivElement>('stop-modal');
-const stopSeqModalClose = $<HTMLButtonElement>('stop-modal-close');
-const stopSeqDot = $<HTMLSpanElement>('stop-dot');
-const formatBtn = $<HTMLButtonElement>('format-btn');
-const formatModal = $<HTMLDivElement>('format-modal');
-const formatModalClose = $<HTMLButtonElement>('format-modal-close');
-const formatDot = $<HTMLSpanElement>('format-dot');
-const extraBtn = $<HTMLButtonElement>('extra-btn');
-const extraModal = $<HTMLDivElement>('extra-modal');
-const extraModalClose = $<HTMLButtonElement>('extra-modal-close');
-const extraDot = $<HTMLSpanElement>('extra-dot');
-const viewCodeBtn = $<HTMLButtonElement>('view-code-btn');
-const viewCodeModal = $<HTMLDivElement>('view-code-modal');
-const viewCodeModalCancel = $<HTMLButtonElement>('view-code-modal-cancel');
-const embedApiKeyCheckbox = $<HTMLInputElement>('embed-api-key');
-const curlCodeOutput = $<HTMLPreElement>('curl-code-output');
-const copyCurlBtn = $<HTMLButtonElement>('copy-curl-btn');
-const importCurlBtn = $<HTMLButtonElement>('import-curl-btn');
-const importCurlModal = $<HTMLDivElement>('import-curl-modal');
-const importCurlModalCancel = $<HTMLButtonElement>('import-curl-modal-cancel');
-const curlInput = $<HTMLTextAreaElement>('curl-input');
-const importPreview = $<HTMLDivElement>('import-preview');
-const importPreviewContent = $<HTMLDivElement>('import-preview-content');
-const importCurlSubmitBtn = $<HTMLButtonElement>('import-curl-btn-submit');
-const sampleMediaModal = $<HTMLDivElement>('sample-media-modal');
-const sampleMediaList = $<HTMLDivElement>('sample-media-list');
-const sampleMediaModalClose = $<HTMLButtonElement>('sample-media-modal-close');
-
-interface SampleMediaItem {
-  id: string;
-  name: string;
-  type: string;
-  data: string;
-  description: string;
-  icon: string;
-}
-
-type DebugEntryType = 'request' | 'sse-chunk' | 'sse-done' | 'error';
-
-interface DebugEntry {
-  id: string;
-  type: DebugEntryType;
-  timestamp: number;
-  payload: unknown;
-}
-
-const DATA_URL_BASE64_REGEX = /^data:([^;,]+)(?:;charset=[^;,]+)?;base64,([A-Za-z0-9+/=\s]+)$/i;
-const BINARY_KEY_HINT_REGEX = /(data|file_data|image|video|audio|attachment|binary|blob|url)$/i;
-
-let debugEntries: DebugEntry[] = [];
-let isDebugPanelOpen = false;
-
-const SAMPLE_MEDIA_ITEMS: SampleMediaItem[] = [
-  {
-    id: 'sample-image',
-    name: 'sample-image.png',
-    type: 'image/png',
-    data: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2x9qQAAAAASUVORK5CYII=',
-    description: 'Example image for multimodal prompts.',
-    icon: 'ri-image-line'
-  },
-  {
-    id: 'sample-audio',
-    name: 'sample-audio.wav',
-    type: 'audio/wav',
-    data: 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=',
-    description: 'Short WAV audio sample.',
-    icon: 'ri-volume-up-line'
-  },
-  {
-    id: 'sample-video',
-    name: 'sample-video.mp4',
-    type: 'video/mp4',
-    data: 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAAAAGlzb20=',
-    description: 'Minimal MP4 header sample.',
-    icon: 'ri-movie-line'
-  },
-  {
-    id: 'sample-document',
-    name: 'sample-document.txt',
-    type: 'text/plain',
-    data: 'data:text/plain;base64,U2FtcGxlIGRvY3VtZW50IGZvciBtdWx0aW1vZGFsIHRlc3RzLg==',
-    description: 'Plain text document sample.',
-    icon: 'ri-file-text-line'
-  }
+const SUGGESTIONS = [
+  'Tell me a joke',
+  "What's the weather forecast for today?",
+  'Help me write a professional email',
+  'Which is bigger? 9.8 or 9.11?',
 ];
 
-const showModal = (el: HTMLElement) => el.classList.remove('hidden');
-const hideModal = (el: HTMLElement) => el.classList.add('hidden');
-
-function getCurrentChat(): Chat | null {
-  const chat = chats.find(c => c.id === currentChatId) || null;
-  if (chat && !chat.messages) {
-    chat.messages = [];
-  }
-  return chat;
-}
-
-async function init() {
-  // Handle URL query parameters for API configuration
-  const urlParams = new URLSearchParams(window.location.search);
-  const paramEndpoint = urlParams.get('api-endpoint');
-  const paramKey = urlParams.get('api-key');
-  const paramModel = urlParams.get('api-model');
-
-  if (paramEndpoint || paramKey || paramModel) {
-    // Load existing config first
-    const existingConfig = await getDefaultModelConfig();
-    if (existingConfig) {
-      modelConfig = existingConfig;
-    }
-
-    // Apply URL params
-    if (paramEndpoint) modelConfig.endpoint = paramEndpoint;
-    if (paramKey) modelConfig.apiKey = paramKey;
-    if (paramModel) modelConfig.name = paramModel;
-
-    // Save and reload to remove sensitive data from URL
-    await saveModelConfig(modelConfig);
-    window.location.replace(window.location.pathname);
-    return;
-  }
-
-  const savedModel = await getDefaultModelConfig();
-  if (savedModel) {
-    modelConfig = savedModel;
-    modelNameInput.value = savedModel.name;
-    endpointInput.value = savedModel.endpoint;
-    apiKeyInput.value = savedModel.apiKey;
-  }
-
-  const savedInference = await getDefaultInferenceConfig();
-  if (savedInference) {
-    inferenceConfig = {
-      ...inferenceConfig,
-      ...savedInference,
-      stop: Array.isArray(savedInference.stop) ? savedInference.stop : [],
-      tools: savedInference.tools ?? '',
-      structuredJson: savedInference.structuredJson ?? '',
-      extraBody: savedInference.extraBody ?? '',
-      reasoningEffort: savedInference.reasoningEffort ?? 'null',
-      temperatureEnabled: savedInference.temperatureEnabled ?? true
-    };
-
-    systemPromptInput.value = inferenceConfig.systemPrompt;
-    tempEnabledInput.checked = inferenceConfig.temperatureEnabled;
-    temperatureInput.value = String(inferenceConfig.temperature ?? 1);
-    temperatureInput.disabled = !inferenceConfig.temperatureEnabled;
-    tempValueSpan.textContent = (inferenceConfig.temperature ?? 1).toFixed(1);
-
-    topKInput.value = String(inferenceConfig.top_k ?? 0);
-    topKValueSpan.textContent = String(inferenceConfig.top_k ?? 0);
-
-    topPInput.value = String(inferenceConfig.top_p ?? 0);
-    topPValueSpan.textContent = (inferenceConfig.top_p ?? 0).toFixed(2);
-
-    stopSequencesInput.value = inferenceConfig.stop.join('\n');
-
-    reasoningSelect.value = inferenceConfig.reasoningEffort;
-    maxTokensInput.value = inferenceConfig.maxCompletionTokens ? String(inferenceConfig.maxCompletionTokens) : '';
-    toolsInput.value = inferenceConfig.tools;
-    structuredJsonInput.value = inferenceConfig.structuredJson;
-    extraBodyInput.value = inferenceConfig.extraBody;
-  }
-
-  chats = await getAllChats();
-
-  if (chats.length === 0) {
-    await createNewChat();
-  } else {
-    currentChatId = chats[0].id;
-  }
-
-  renderTabs();
-  renderMessages();
-  updateModelDisplay();
-  updateConfigDots();
-  setupEventListeners();
-}
-
-async function createNewChat(): Promise<Chat> {
-  const chat: Chat = {
-    id: crypto.randomUUID(),
-    title: 'New Chat',
-    messages: [],
-    modelConfigId: DEFAULT_MODEL_ID,
-    inferenceConfigId: DEFAULT_INFERENCE_ID,
-    createdAt: Date.now(),
-    updatedAt: Date.now()
-  };
-
-  await saveChat(chat);
-  chats.unshift(chat);
-  currentChatId = chat.id;
-
-  return chat;
-}
-
-function renderTabs() {
-  tabsContainer.innerHTML = '';
-
-  for (const chat of chats) {
-    const tab = document.createElement('div');
-    tab.className = `tab${chat.id === currentChatId ? ' active' : ''}`;
-    tab.dataset.id = chat.id;
-
-    tab.innerHTML = `
-      <span class="tab-title">${escapeHtml(chat.title)}</span>
-      <button class="tab-close" data-id="${chat.id}">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 6L6 18M6 6l12 12"/>
-        </svg>
-      </button>
-    `;
-
-    tab.addEventListener('click', (e) => {
-      if ((e.target as HTMLElement).closest('.tab-close')) return;
-      switchToChat(chat.id);
-    });
-
-    const closeBtn = tab.querySelector('.tab-close');
-    closeBtn?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      closeTab(chat.id);
-    });
-
-    tabsContainer.appendChild(tab);
-  }
-}
-
-async function switchToChat(chatId: string) {
-  if (chatId === currentChatId) return;
-  if (isStreaming) return;
-
-  currentChatId = chatId;
-  clearDebugEntries();
-  renderTabs();
-  messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-  renderMessages();
-
-  pendingAttachments = [];
-  renderInputAttachments();
-}
-
-async function closeTab(chatId: string) {
-  if (isStreaming) return;
-
-  if (chats.length <= 1) {
-    await deleteChat(chatId);
-    chats = [];
-    await createNewChat();
-    clearDebugEntries();
-    renderTabs();
-    messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-    renderMessages();
-    return;
-  }
-
-  await deleteChat(chatId);
-  chats = chats.filter(c => c.id !== chatId);
-
-  if (currentChatId === chatId) {
-    currentChatId = chats[0]?.id || null;
-    clearDebugEntries();
-    messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-    renderMessages();
-  }
-
-  renderTabs();
-}
-
-async function addNewTab() {
-  if (isStreaming) return;
-
-  await createNewChat();
-  clearDebugEntries();
-  renderTabs();
-  messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-  renderMessages();
-}
-
-function setDebugPanelOpen(open: boolean) {
-  isDebugPanelOpen = open;
-  debugPanel.classList.toggle('hidden', !open);
-  chatContainer.classList.toggle('debug-open', open);
-  chatBody.classList.toggle('debug-open', open);
-  toggleDebugBtn.classList.toggle('active', open);
-
-  if (open) {
-    renderDebugEntries();
-  }
-}
-
-function clearDebugEntries() {
-  debugEntries = [];
-  debugEntriesContainer.innerHTML = '';
-}
-
-function renderDebugEntries() {
-  debugEntriesContainer.innerHTML = '';
-  for (const entry of debugEntries) {
-    debugEntriesContainer.appendChild(createDebugEntryElement(entry));
-  }
-  debugEntriesContainer.scrollTop = debugEntriesContainer.scrollHeight;
-}
-
-function addDebugEntry(type: DebugEntryType, payload: unknown) {
-  const shouldStickToBottom = isDebugScrolledToBottom();
-  const entry: DebugEntry = {
-    id: crypto.randomUUID(),
-    type,
-    timestamp: Date.now(),
-    payload: sanitizeDebugPayload(payload)
-  };
-
-  debugEntries.push(entry);
-
-  if (!isDebugPanelOpen) {
-    return;
-  }
-
-  debugEntriesContainer.appendChild(createDebugEntryElement(entry));
-  if (shouldStickToBottom) {
-    debugEntriesContainer.scrollTop = debugEntriesContainer.scrollHeight;
-  }
-}
-
-function isDebugScrolledToBottom(): boolean {
-  const threshold = 24;
-  const distanceToBottom = debugEntriesContainer.scrollHeight - debugEntriesContainer.scrollTop - debugEntriesContainer.clientHeight;
-  return distanceToBottom <= threshold;
-}
-
-function createDebugEntryElement(entry: DebugEntry): HTMLDivElement {
-  const div = document.createElement('div');
-  div.className = `debug-entry debug-entry--${entry.type}`;
-  div.dataset.id = entry.id;
-
-  const header = document.createElement('div');
-  header.className = 'debug-entry-header';
-
-  const badge = document.createElement('span');
-  badge.className = 'debug-entry-badge';
-  badge.textContent = getDebugTypeLabel(entry.type);
-
-  const timestamp = document.createElement('span');
-  timestamp.textContent = new Date(entry.timestamp).toLocaleTimeString('pt-BR', { hour12: false });
-
-  const payload = document.createElement('pre');
-  payload.textContent = stringifyDebugPayload(entry.payload);
-
-  header.appendChild(badge);
-  header.appendChild(timestamp);
-  div.appendChild(header);
-  div.appendChild(payload);
-
-  return div;
-}
-
-function getDebugTypeLabel(type: DebugEntryType): string {
-  if (type === 'request') return 'REQUEST';
-  if (type === 'sse-chunk') return 'SSE';
-  if (type === 'sse-done') return 'DONE';
-  return 'ERROR';
-}
-
-function stringifyDebugPayload(payload: unknown): string {
-  try {
-    return JSON.stringify(payload, null, 2) ?? String(payload);
-  } catch {
-    return String(payload);
-  }
-}
-
-function sanitizeDebugPayload(value: unknown, keyPath: string[] = []): unknown {
-  if (typeof value === 'string') {
-    return truncateBinaryString(value, keyPath) ?? value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item, index) => sanitizeDebugPayload(item, [...keyPath, String(index)]));
-  }
-
-  if (value && typeof value === 'object') {
-    const source = value as Record<string, unknown>;
-    const sanitized: Record<string, unknown> = {};
-    for (const [key, nested] of Object.entries(source)) {
-      sanitized[key] = sanitizeDebugPayload(nested, [...keyPath, key]);
-    }
-    return sanitized;
-  }
-
-  return value;
-}
-
-function truncateBinaryString(value: string, keyPath: string[]): string | null {
-  const dataUrlMatch = value.match(DATA_URL_BASE64_REGEX);
-  if (dataUrlMatch) {
-    const mimeType = dataUrlMatch[1].toLowerCase();
-    const base64 = dataUrlMatch[2].replace(/\s+/g, '');
-    const bytes = estimateBase64Bytes(base64);
-    return `[base64 ${mimeType}: ${formatBytes(bytes)} truncated]`;
-  }
-
-  const keyName = keyPath[keyPath.length - 1] ?? '';
-  if (!BINARY_KEY_HINT_REGEX.test(keyName)) {
-    return null;
-  }
-
-  const compactValue = value.replace(/\s+/g, '');
-  if (!looksLikeBase64(compactValue)) {
-    return null;
-  }
-
-  const bytes = estimateBase64Bytes(compactValue);
-  return `[base64 binary: ${formatBytes(bytes)} truncated]`;
-}
-
-function looksLikeBase64(value: string): boolean {
-  if (value.length < 300 || value.length % 4 !== 0) {
-    return false;
-  }
-
-  if (/[^A-Za-z0-9+/=]/.test(value)) {
-    return false;
-  }
-
-  const firstPadding = value.indexOf('=');
-  if (firstPadding === -1) {
-    return true;
-  }
-
-  return !/[^=]/.test(value.slice(firstPadding));
-}
-
-function estimateBase64Bytes(base64: string): number {
-  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
-  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes}B`;
-  }
-
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)}KB`;
-  }
-
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}
-
-function setupEventListeners() {
-  modelNameInput.addEventListener('input', saveModelConfigDebounced);
-  endpointInput.addEventListener('input', saveModelConfigDebounced);
-  apiKeyInput.addEventListener('input', saveModelConfigDebounced);
-
-  systemPromptInput.addEventListener('input', saveInferenceConfigDebounced);
-  tempEnabledInput.addEventListener('change', () => {
-    temperatureInput.disabled = !tempEnabledInput.checked;
-    saveInferenceConfigDebounced();
-  });
-  temperatureInput.addEventListener('input', () => {
-    tempValueSpan.textContent = parseFloat(temperatureInput.value).toFixed(1);
-    saveInferenceConfigDebounced();
-  });
-  topKInput.addEventListener('input', () => {
-    topKValueSpan.textContent = topKInput.value;
-    saveInferenceConfigDebounced();
-  });
-  topPInput.addEventListener('input', () => {
-    topPValueSpan.textContent = parseFloat(topPInput.value).toFixed(2);
-    saveInferenceConfigDebounced();
-  });
-  reasoningSelect.addEventListener('change', saveInferenceConfigDebounced);
-  maxTokensInput.addEventListener('input', saveInferenceConfigDebounced);
-  stopSequencesInput.addEventListener('input', saveInferenceConfigDebounced);
-  toolsInput.addEventListener('input', () => {
-    validateToolsJson();
-    saveInferenceConfigDebounced();
-  });
-  structuredJsonInput.addEventListener('input', () => {
-    validateJsonField(structuredJsonInput);
-    saveInferenceConfigDebounced();
-  });
-  extraBodyInput.addEventListener('input', () => {
-    validateJsonField(extraBodyInput);
-    saveInferenceConfigDebounced();
-  });
-
-  userInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  });
-
-  userInput.addEventListener('input', () => {
-    userInput.style.height = 'auto';
-    userInput.style.height = Math.min(userInput.scrollHeight, 200) + 'px';
-  });
-
-  sendBtn.addEventListener('click', sendMessage);
-  stopBtn.addEventListener('click', stopStreaming);
-  attachBtn.addEventListener('click', () => fileInput.click());
-  sampleMediaBtn.addEventListener('click', openSampleMediaModal);
-  toggleDebugBtn.addEventListener('click', () => setDebugPanelOpen(!isDebugPanelOpen));
-  clearBtn.addEventListener('click', clearChat);
-  debugClearBtn.addEventListener('click', clearDebugEntries);
-  resetParamsBtn.addEventListener('click', resetParameters);
-  fileInput.addEventListener('change', handleFileSelect);
-  userInput.addEventListener('paste', handlePaste);
-  emptyState.querySelectorAll<HTMLButtonElement>('.empty-suggestion-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const prompt = btn.dataset.prompt;
-      if (!prompt) return;
-      userInput.value = prompt;
-      userInput.style.height = 'auto';
-      userInput.style.height = Math.min(userInput.scrollHeight, 200) + 'px';
-      userInput.focus();
-    });
-  });
-  addTabBtn.addEventListener('click', addNewTab);
-  listModelsBtn.addEventListener('click', openModelsModal);
-  modelsModalCancel.addEventListener('click', () => hideModal(modelsModal));
-  themeToggleBtn.addEventListener('click', toggleTheme);
-
-  providersBtn.addEventListener('click', openProvidersModal);
-  providersModalCancel.addEventListener('click', closeProvidersModal);
-  providerSaveBtn.addEventListener('click', saveOrUpdateProvider);
-
-  systemPromptBtn.addEventListener('click', () => showModal(systemPromptModal));
-  systemPromptModalClose.addEventListener('click', () => hideModal(systemPromptModal));
-  toolsBtn.addEventListener('click', () => showModal(toolsModal));
-  toolsModalClose.addEventListener('click', () => {
-    if (validateAndFormatJson(toolsInput)) {
-      hideModal(toolsModal);
-    }
-  });
-  stopSeqBtn.addEventListener('click', () => showModal(stopSeqModal));
-  stopSeqModalClose.addEventListener('click', () => hideModal(stopSeqModal));
-  formatBtn.addEventListener('click', () => showModal(formatModal));
-  formatModalClose.addEventListener('click', () => {
-    if (validateAndFormatJson(structuredJsonInput)) {
-      hideModal(formatModal);
-    }
-  });
-  extraBtn.addEventListener('click', () => showModal(extraModal));
-  extraModalClose.addEventListener('click', () => {
-    if (validateAndFormatJson(extraBodyInput)) {
-      hideModal(extraModal);
-    }
-  });
-
-  viewCodeBtn.addEventListener('click', openViewCodeModal);
-  viewCodeModalCancel.addEventListener('click', () => hideModal(viewCodeModal));
-  embedApiKeyCheckbox.addEventListener('change', updateCurlCode);
-  copyCurlBtn.addEventListener('click', copyCurlToClipboard);
-
-  importCurlBtn.addEventListener('click', openImportCurlModal);
-  importCurlModalCancel.addEventListener('click', () => {
-    hideModal(importCurlModal);
-    curlInput.value = '';
-    hideModal(importPreview);
-  });
-  curlInput.addEventListener('input', updateImportPreview);
-  importCurlSubmitBtn.addEventListener('click', importCurlCommand);
-
-  sampleMediaModalClose.addEventListener('click', () => hideModal(sampleMediaModal));
-
-  initTheme();
-
-  toolModalCancel.addEventListener('click', () => {
-    hideModal(toolModal);
-    pendingToolCall = null;
-  });
-
-  toolModalSubmit.addEventListener('click', submitToolResponse);
-
-  editModalCancel.addEventListener('click', () => {
-    hideModal(editModal);
-    editingMessageIndex = null;
-  });
-
-  editModalSubmit.addEventListener('click', submitEditedMessage);
-
-  document.querySelectorAll('.hint-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const target = e.target as HTMLButtonElement;
-      const endpoint = target.dataset.endpoint;
-      const tool = target.dataset.tool;
-
-      if (endpoint) {
-        providerEndpointInput.value = endpoint;
-      }
-
-      if (tool) {
-        const toolExamples: Record<string, any[]> = {
-          weather: [{
-            type: "function",
-            function: {
-              name: "get_weather",
-              description: "Get the current weather for a location",
-              parameters: {
-                type: "object",
-                properties: {
-                  location: {
-                    type: "string",
-                    description: "The city and state, e.g. San Francisco, CA"
-                  },
-                  unit: {
-                    type: "string",
-                    enum: ["celsius", "fahrenheit"],
-                    description: "The temperature unit"
-                  }
-                },
-                required: ["location"]
-              }
-            }
-          }],
-          calculator: [{
-            type: "function",
-            function: {
-              name: "calculate",
-              description: "Perform mathematical calculations",
-              parameters: {
-                type: "object",
-                properties: {
-                  expression: {
-                    type: "string",
-                    description: "The mathematical expression to evaluate, e.g. '2 + 2' or 'sqrt(16)'"
-                  }
-                },
-                required: ["expression"]
-              }
-            }
-          }],
-          websearch: [{
-            type: "function",
-            function: {
-              name: "web_search",
-              description: "Search the web for current information",
-              parameters: {
-                type: "object",
-                properties: {
-                  query: {
-                    type: "string",
-                    description: "The search query"
-                  },
-                  num_results: {
-                    type: "integer",
-                    description: "Number of results to return (default: 5)",
-                    minimum: 1,
-                    maximum: 10
-                  }
-                },
-                required: ["query"]
-              }
-            }
-          }]
-        };
-
-        if (toolExamples[tool]) {
-          toolsInput.value = JSON.stringify(toolExamples[tool], null, 2);
-          saveInferenceConfigDebounced();
-        }
-      }
-    });
-  });
-}
-
-let saveModelTimeout: number;
-function saveModelConfigDebounced() {
-  clearTimeout(saveModelTimeout);
-  saveModelTimeout = window.setTimeout(async () => {
-    modelConfig.name = modelNameInput.value;
-    modelConfig.endpoint = endpointInput.value;
-    modelConfig.apiKey = apiKeyInput.value;
-    await saveModelConfig(modelConfig);
-    updateModelDisplay();
-  }, 500);
-}
-
-let saveInferenceTimeout: number;
-function saveInferenceConfigDebounced() {
-  clearTimeout(saveInferenceTimeout);
-  saveInferenceTimeout = window.setTimeout(async () => {
-    inferenceConfig.systemPrompt = systemPromptInput.value;
-    inferenceConfig.temperatureEnabled = tempEnabledInput.checked;
-    inferenceConfig.temperature = parseFloat(temperatureInput.value);
-
-    const topKValue = parseInt(topKInput.value, 10);
-    inferenceConfig.top_k = topKValue > 0 ? topKValue : null;
-
-    const topPValue = parseFloat(topPInput.value);
-    inferenceConfig.top_p = topPValue > 0 ? topPValue : null;
-
-    const stopSeq = stopSequencesInput.value.split('\n').filter(s => s.trim());
-    inferenceConfig.stop = stopSeq.length > 0 ? stopSeq : [];
-
-    inferenceConfig.reasoningEffort = reasoningSelect.value as InferenceConfig['reasoningEffort'];
-    inferenceConfig.maxCompletionTokens = maxTokensInput.value ? parseInt(maxTokensInput.value, 10) : null;
-    inferenceConfig.tools = toolsInput.value;
-    inferenceConfig.structuredJson = structuredJsonInput.value;
-    inferenceConfig.extraBody = extraBodyInput.value;
-    await saveInferenceConfig(inferenceConfig);
-    updateConfigDots();
-  }, 500);
-}
-
-function updateConfigDots() {
-  const hasPrompt = systemPromptInput.value.trim().length > 0;
-  promptDot.classList.toggle('hidden', !hasPrompt);
-
-  const hasTools = toolsInput.value.trim().length > 0;
-  toolsDot.classList.toggle('hidden', !hasTools);
-
-  const hasStop = stopSequencesInput.value.trim().length > 0;
-  stopSeqDot.classList.toggle('hidden', !hasStop);
-
-  const hasStructured = structuredJsonInput.value.trim().length > 0;
-  formatDot.classList.toggle('hidden', !hasStructured);
-
-  const hasExtra = extraBodyInput.value.trim().length > 0;
-  extraDot.classList.toggle('hidden', !hasExtra);
-}
-
-function validateToolsJson() {
-  const value = toolsInput.value.trim();
-  if (!value) {
-    toolsInput.classList.remove('error');
-    return true;
-  }
-  try {
-    JSON.parse(value);
-    toolsInput.classList.remove('error');
-    return true;
-  } catch {
-    toolsInput.classList.add('error');
-    return false;
-  }
-}
-
-function validateJsonField(textarea: HTMLTextAreaElement) {
-  const value = textarea.value.trim();
-  if (!value) {
-    textarea.classList.remove('error');
-    return true;
-  }
-  try {
-    JSON.parse(value);
-    textarea.classList.remove('error');
-    return true;
-  } catch {
-    textarea.classList.add('error');
-    return false;
-  }
-}
-
-function validateAndFormatJson(textarea: HTMLTextAreaElement) {
-  const value = textarea.value.trim();
-  if (!value) {
-    textarea.classList.remove('error');
-    return true;
-  }
-  try {
-    const parsed = JSON.parse(value);
-    textarea.value = JSON.stringify(parsed, null, 2);
-    textarea.classList.remove('error');
-    return true;
-  } catch (error) {
-    textarea.classList.add('error');
-    const errorMessage = error instanceof Error ? error.message : 'Invalid JSON syntax';
-    alert(`Erro na sintaxe JSON:\n${errorMessage}`);
-    return false;
-  }
-}
-
-function updateModelDisplay() {
-  if (modelConfig.name && modelConfig.endpoint) {
-    modelDisplay.textContent = modelConfig.name;
-    statusDot.classList.add('connected');
-  } else {
-    modelDisplay.textContent = 'No model';
-    statusDot.classList.remove('connected');
-  }
-}
-
-function renderMessages() {
-  const chat = getCurrentChat();
-  const hasMessages = chat && chat.messages.length > 0;
-  hasMessages ? hideModal(emptyState) : showModal(emptyState);
-
-  if (!hasMessages) {
-    Array.from(messagesContainer.querySelectorAll('.message')).forEach(el => el.remove());
-    return;
-  }
-
-  const existingMessages = messagesContainer.querySelectorAll('.message');
-  const existingCount = existingMessages.length;
-
-  for (let i = existingCount; i < chat!.messages.length; i++) {
-    const msg = chat!.messages[i];
-    const msgEl = createMessageElement(msg, i);
-    messagesContainer.insertBefore(msgEl, emptyState);
-  }
-
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-async function updateMessageContent(msgIndex: number, segments: MessageSegment[], currentSegmentType?: 'content' | 'reasoning' | null) {
-  const msgEl = messagesContainer.querySelector(`.message[data-index="${msgIndex}"]`);
-  if (!msgEl) return;
-
-  const chat = getCurrentChat();
-  const msg = chat?.messages[msgIndex];
-  if (!msg) return;
-
-  // Find or create content container
-  let contentContainer = msgEl.querySelector('.message-body');
-  if (!contentContainer) {
-    const header = msgEl.querySelector('.message-header');
-    contentContainer = document.createElement('div');
-    contentContainer.className = 'message-body';
-    if (header?.nextSibling) {
-      msgEl.insertBefore(contentContainer, header.nextSibling);
-    } else {
-      msgEl.appendChild(contentContainer);
-    }
-  }
-
-  // Render segments incrementally
-  let html = '';
-  for (let i = 0; i < segments.length; i++) {
-    const segment = segments[i];
-    const isLastSegment = i === segments.length - 1;
-    const isStreaming = isLastSegment && currentSegmentType === segment.type;
-
-    if (segment.type === 'reasoning') {
-      html += `
-        <details class="reasoning-block"${isStreaming ? ' open' : ''}>
-          <summary>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-              <line x1="12" y1="17" x2="12.01" y2="17"/>
-            </svg>
-            Thinking
-          </summary>
-          <div class="reasoning-content">${await marked.parse(segment.text)}</div>
-        </details>
-      `;
-    } else if (segment.type === 'content') {
-      html += `<div class="message-content markdown-body">${await marked.parse(segment.text)}</div>`;
-    }
-  }
-
-  contentContainer.innerHTML = html;
-  messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function renderAssistantContent(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      const formatted = JSON.stringify(parsed, null, 2);
-      return `<pre><code class="language-json">${escapeHtml(formatted)}</code></pre>`;
-    } catch {
-      return marked.parse(text) as string;
-    }
-  }
-  return marked.parse(text) as string;
-}
-
-function createMessageElement(msg: ChatMessage, index: number): HTMLElement {
-  const div = document.createElement('div');
-  div.className = `message ${msg.role}`;
-  div.dataset.index = String(index);
-
-  let actionsHtml = '';
-  if (msg.role === 'user') {
-    actionsHtml = `
-      <div class="message-actions">
-        <button class="btn btn-icon btn-sm rerun-btn" title="Rerun from here">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M1 4v6h6M23 20v-6h-6"/>
-            <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
-          </svg>
-        </button>
-        <button class="btn btn-icon btn-sm copy-btn" title="Copy message">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-          </svg>
-        </button>
-        <button class="btn btn-icon btn-sm edit-btn" title="Edit message">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-          </svg>
-        </button>
-      </div>
-    `;
-  } else if (msg.role === 'assistant') {
-    actionsHtml = `
-      <div class="message-actions">
-        <button class="btn btn-icon btn-sm copy-btn" title="Copy message">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-          </svg>
-        </button>
-      </div>
-    `;
-  }
-
-  let contentHtml = '';
-
-  // Render segments if available (interleaved reasoning and content)
-  if (msg.segments && msg.segments.length > 0) {
-    for (const segment of msg.segments) {
-      if (segment.type === 'reasoning') {
-        contentHtml += `
-          <details class="reasoning-block">
-            <summary>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-                <line x1="12" y1="17" x2="12.01" y2="17"/>
-              </svg>
-              Thinking
-            </summary>
-            <div class="reasoning-content">${marked.parse(segment.text)}</div>
-          </details>
-        `;
-      } else if (segment.type === 'content') {
-        if (msg.role === 'assistant') {
-          contentHtml += `<div class="message-content markdown-body">${renderAssistantContent(segment.text)}</div>`;
-        } else {
-          contentHtml += `<div class="message-content">${escapeHtml(segment.text)}</div>`;
-        }
-      }
-    }
-  } else {
-    // Fallback to legacy rendering for backward compatibility
-    if (msg.content || msg.role === 'assistant') {
-      const content = msg.content || '';
-      if (msg.role === 'assistant' && content) {
-        contentHtml = `<div class="message-content markdown-body">${renderAssistantContent(content)}</div>`;
-      } else {
-        contentHtml = `<div class="message-content">${escapeHtml(content)}</div>`;
-      }
-    }
-  }
-
-
-
-  const chat = getCurrentChat();
-
-  if (msg.attachments && msg.attachments.length > 0) {
-    contentHtml += '<div class="attachments">';
-    for (const att of msg.attachments) {
-      if (att.type.startsWith('image/')) {
-        contentHtml += `<div class="attachment"><img src="${att.data}" alt="${escapeHtml(att.name)}" /></div>`;
-      } else if (att.type.startsWith('audio/')) {
-        contentHtml += `<div class="attachment"><span>🎵 ${escapeHtml(att.name)}</span></div>`;
-      } else if (att.type.startsWith('video/')) {
-        contentHtml += `<div class="attachment"><span>🎬 ${escapeHtml(att.name)}</span></div>`;
-      } else {
-        contentHtml += `<div class="attachment"><span>📎 ${escapeHtml(att.name)}</span></div>`;
-      }
-    }
-    contentHtml += '</div>';
-  }
-
-  if (msg.toolCalls && msg.toolCalls.length > 0) {
-    contentHtml += '<div class="tool-calls">';
-    for (const tc of msg.toolCalls) {
-      const hasResponse = chat?.messages.some(m => m.toolCallId === tc.id);
-      contentHtml += `
-        <div class="tool-call" data-tool-id="${tc.id}">
-          <div class="tool-call-header">
-            <i class="ri-wrench-line"></i>
-            <span class="tool-call-name">${escapeHtml(tc.function.name)}</span>
-            <span class="tool-call-id">${escapeHtml(tc.id)}</span>
-          </div>
-          <div class="tool-call-body">
-            <pre class="tool-call-args">${escapeHtml(formatJson(tc.function.arguments))}</pre>
-            ${!hasResponse ? `<button class="btn btn-secondary btn-sm tool-response-btn" data-tool-id="${tc.id}" data-msg-index="${index}"><i class="ri-reply-line"></i> Provide Response</button>` : ''}
-          </div>
-        </div>
-      `;
-    }
-    contentHtml += '</div>';
-  }
-
-  if (msg.role === 'tool' && msg.toolCallId) {
-    const linkedToolCall = chat?.messages.flatMap(m => m.toolCalls || []).find(tc => tc.id === msg.toolCallId);
-    const toolName = linkedToolCall?.function.name || 'unknown';
-    contentHtml = `
-      <div class="tool-response" data-tool-call-id="${msg.toolCallId}">
-        <div class="tool-response-header">
-          <i class="ri-checkbox-circle-line"></i>
-          <span>Tool Response</span>
-          <span class="tool-response-ref">
-            <i class="ri-arrow-right-s-line"></i>
-            <span class="tool-response-name">${escapeHtml(toolName)}</span>
-            <span class="tool-response-id">${escapeHtml(msg.toolCallId)}</span>
-          </span>
-          <button class="btn btn-icon btn-sm tool-edit-btn" title="Edit response">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-            </svg>
-          </button>
-        </div>
-        <div class="tool-response-content">${escapeHtml(msg.content || '')}</div>
-      </div>
-    `;
-  }
-
-  // Only show single reasoning block at top if using legacy mode (no segments)
-  const reasoningHtml = (msg.reasoning && !msg.segments?.length) ? `
-    <details class="reasoning-block">
-      <summary>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"/>
-          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-          <line x1="12" y1="17" x2="12.01" y2="17"/>
-        </svg>
-        Thinking
-      </summary>
-      <div class="reasoning-content">${marked.parse(msg.reasoning)}</div>
-    </details>
-  ` : '';
-
-  const showRole = msg.role === 'tool';
-  const hasMeta = showRole || Boolean(actionsHtml);
-
-  div.innerHTML = `
-    ${hasMeta ? `
-      <div class="message-meta">
-        ${showRole ? `<span class="message-role ${msg.role}">${msg.role}</span>` : '<span class="message-meta-spacer"></span>'}
-        ${actionsHtml}
-      </div>
-    ` : ''}
-    <div class="message-card">
-      <div class="message-body">
-        ${reasoningHtml}
-        ${contentHtml}
-      </div>
-      ${msg.usage ? `<div class="token-usage"><span><i class="ri-arrow-down-line"></i>${msg.usage.promptTokens} in</span><span><i class="ri-arrow-up-line"></i>${msg.usage.completionTokens} out</span>${msg.usage.cachedTokens ? `<span><i class="ri-database-2-line"></i>${msg.usage.cachedTokens} cached</span>` : ''}${msg.usage.tokensPerSecond ? `<span><i class="ri-speed-line"></i>${msg.usage.tokensPerSecond.toFixed(1)} tok/s</span>` : ''}${msg.usage.responseTimeMs ? `<span><i class="ri-timer-line"></i>${(msg.usage.responseTimeMs / 1000).toFixed(2)}s</span>` : ''}</div>` : ''}
-    </div>
-  `;
-
-  const editBtn = div.querySelector('.edit-btn');
-  if (editBtn) {
-    editBtn.addEventListener('click', () => openEditModal(index));
-  }
-
-  const rerunBtn = div.querySelector('.rerun-btn');
-  if (rerunBtn) {
-    rerunBtn.addEventListener('click', () => rerunFromMessage(index));
-  }
-
-  const copyBtn = div.querySelector('.copy-btn');
-  if (copyBtn) {
-    copyBtn.addEventListener('click', () => copyToClipboard(index, copyBtn as HTMLButtonElement));
-  }
-
-  const toolBtns = div.querySelectorAll('.tool-response-btn');
-  toolBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const toolId = (btn as HTMLButtonElement).dataset.toolId!;
-      const msgIndex = parseInt((btn as HTMLButtonElement).dataset.msgIndex!, 10);
-      const toolCall = chat?.messages[msgIndex].toolCalls?.find(tc => tc.id === toolId);
-      if (toolCall) {
-        openToolModal(msgIndex, toolCall);
-      }
-    });
-  });
-
-  const toolEditBtn = div.querySelector('.tool-edit-btn');
-  if (toolEditBtn) {
-    toolEditBtn.addEventListener('click', () => openEditModal(index));
-  }
-
-  return div;
-}
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-function formatJson(str: string): string {
-  try {
-    return JSON.stringify(JSON.parse(str), null, 2);
-  } catch {
-    return str;
-  }
-}
-
-async function copyToClipboard(index: number, btn: HTMLButtonElement) {
-  const chat = getCurrentChat();
-  if (!chat) return;
-
-  const content = chat.messages[index].content || '';
-  await navigator.clipboard.writeText(content);
-
-  const originalHtml = btn.innerHTML;
-  btn.innerHTML = `
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <polyline points="20 6 9 17 4 12"></polyline>
-    </svg>
-  `;
-  setTimeout(() => btn.innerHTML = originalHtml, 2000);
-}
-
-async function rerunFromMessage(index: number) {
-  const chat = getCurrentChat();
-  if (!chat || isStreaming) return;
-
-  chat.messages = chat.messages.slice(0, index + 1);
-  chat.updatedAt = Date.now();
-  await saveChat(chat);
-
-  messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-  renderMessages();
-
-  await sendToApi();
-}
-
-function openEditModal(index: number) {
-  const chat = getCurrentChat();
-  if (!chat) return;
-  editingMessageIndex = index;
-  editContent.value = chat.messages[index].content || '';
-  showModal(editModal);
-}
-
-function openToolModal(messageIndex: number, toolCall: ToolCall) {
-  pendingToolCall = { messageIndex, toolCall };
-  toolModalName.textContent = `Function: ${toolCall.function.name}`;
-  toolResponse.value = '';
-  showModal(toolModal);
-}
-
-async function submitEditedMessage() {
-  const chat = getCurrentChat();
-  if (editingMessageIndex === null || !chat) return;
-
-  chat.messages[editingMessageIndex].content = editContent.value;
-  chat.messages = chat.messages.slice(0, editingMessageIndex + 1);
-  chat.updatedAt = Date.now();
-  await saveChat(chat);
-
-  messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-  renderMessages();
-
-  hideModal(editModal);
-  editingMessageIndex = null;
-
-  await sendToApi();
-}
-
-async function openModelsModal() {
-  if (!modelConfig.endpoint || !modelConfig.apiKey) {
-    showError('Please configure Endpoint URL and API Key first');
-    return;
-  }
-
-  showModal(modelsModal);
-  modelsList.innerHTML = '<div class="loading-indicator">Loading models...</div>';
-
-  try {
-    const models = await listModels(modelConfig);
-    renderModelsList(models);
-  } catch (err) {
-    modelsList.innerHTML = `<div class="error-message">Error fetching models: ${err instanceof Error ? err.message : String(err)}</div>`;
-  }
-}
-
-function renderModelsList(models: Model[]) {
-  if (models.length === 0) {
-    modelsList.innerHTML = '<div class="empty-state">No models found</div>';
-    return;
-  }
-
-  modelsList.innerHTML = '';
-
-  // Sort models by id
-  models.sort((a, b) => a.id.localeCompare(b.id));
-
-  for (const model of models) {
-    const div = document.createElement('div');
-    div.className = 'model-item';
-    div.innerHTML = `
-      <div class="model-item-id">${escapeHtml(model.id)}</div>
-      <div class="model-item-meta">
-        <span>${escapeHtml(model.owned_by)}</span>
-        <span>${new Date(model.created * 1000).toLocaleDateString()}</span>
-      </div>
-    `;
-
-    div.addEventListener('click', () => {
-      modelNameInput.value = model.id;
-      modelConfig.name = model.id;
-      saveModelConfigDebounced(); // Trigger save
-      updateModelDisplay();
-      hideModal(modelsModal);
-    });
-
-    modelsList.appendChild(div);
-  }
-}
-
-function openViewCodeModal() {
-  const chat = getCurrentChat();
-  if (!chat) return;
-
-  embedApiKeyCheckbox.checked = false;
-  updateCurlCode();
-  showModal(viewCodeModal);
-}
-
-function updateCurlCode() {
-  const chat = getCurrentChat();
-  if (!chat) return;
-
-  const request = buildRequest(modelConfig, inferenceConfig, chat.messages);
-  const curlCommand = generateCurlCommand(modelConfig, request, embedApiKeyCheckbox.checked);
-  curlCodeOutput.textContent = curlCommand;
-}
-
-async function copyCurlToClipboard() {
-  const code = curlCodeOutput.textContent || '';
-  try {
-    await navigator.clipboard.writeText(code);
-    const originalText = copyCurlBtn.innerHTML;
-    copyCurlBtn.innerHTML = '<i class="ri-check-line"></i> Copied!';
-    setTimeout(() => {
-      copyCurlBtn.innerHTML = originalText;
-    }, 2000);
-  } catch {
-    alert('Failed to copy to clipboard');
-  }
-}
-
-function openImportCurlModal() {
-  curlInput.value = '';
-  hideModal(importPreview);
-  showModal(importCurlModal);
-}
-
-function updateImportPreview() {
-  const value = curlInput.value.trim();
-  if (!value) {
-    hideModal(importPreview);
-    return;
-  }
-
-  try {
-    const parsed = parseCurlCommand(value);
-    const imported = importFromCurl(parsed);
-
-    let html = '';
-    html += `<div class="import-preview-item"><span class="import-preview-label">Endpoint:</span><span class="import-preview-value">${escapeHtml(imported.endpoint)}</span></div>`;
-    html += `<div class="import-preview-item"><span class="import-preview-label">Model:</span><span class="import-preview-value">${escapeHtml(imported.model || '(not specified)')}</span></div>`;
-    html += `<div class="import-preview-item"><span class="import-preview-label">API Key:</span><span class="import-preview-value">${imported.apiKey ? '••••••••' : '(not included)'}</span></div>`;
-    html += `<div class="import-preview-item"><span class="import-preview-label">Messages:</span><span class="import-preview-value">${imported.messages.length} message(s)</span></div>`;
-    if (imported.systemPrompt) {
-      const truncated = imported.systemPrompt.length > 100 ? imported.systemPrompt.slice(0, 100) + '...' : imported.systemPrompt;
-      html += `<div class="import-preview-item"><span class="import-preview-label">System:</span><span class="import-preview-value truncated">${escapeHtml(truncated)}</span></div>`;
-    }
-    if (imported.temperature !== undefined) {
-      html += `<div class="import-preview-item"><span class="import-preview-label">Temperature:</span><span class="import-preview-value">${imported.temperature}</span></div>`;
-    }
-    if (imported.tools) {
-      html += `<div class="import-preview-item"><span class="import-preview-label">Tools:</span><span class="import-preview-value">Included</span></div>`;
-    }
-
-    importPreviewContent.innerHTML = html;
-    showModal(importPreview);
-  } catch (e) {
-    importPreviewContent.innerHTML = `<div class="import-preview-item"><span class="import-preview-label" style="color: var(--error);">Error:</span><span class="import-preview-value">${escapeHtml((e as Error).message)}</span></div>`;
-    showModal(importPreview);
-  }
-}
-
-async function importCurlCommand() {
-  const value = curlInput.value.trim();
-  if (!value) return;
-
-  try {
-    const parsed = parseCurlCommand(value);
-    const imported = importFromCurl(parsed);
-
-    if (imported.endpoint) {
-      modelConfig.endpoint = imported.endpoint;
-      endpointInput.value = imported.endpoint;
-    }
-    if (imported.apiKey) {
-      modelConfig.apiKey = imported.apiKey;
-      apiKeyInput.value = imported.apiKey;
-    }
-    if (imported.model) {
-      modelConfig.name = imported.model;
-      modelNameInput.value = imported.model;
-    }
-    await saveModelConfig(modelConfig);
-    updateModelDisplay();
-
-    if (imported.systemPrompt) {
-      inferenceConfig.systemPrompt = imported.systemPrompt;
-      systemPromptInput.value = imported.systemPrompt;
-    }
-    if (imported.temperature !== undefined) {
-      inferenceConfig.temperature = imported.temperature;
-      inferenceConfig.temperatureEnabled = true;
-      temperatureInput.value = String(imported.temperature);
-      tempValueSpan.textContent = imported.temperature.toFixed(1);
-      tempEnabledInput.checked = true;
-      temperatureInput.disabled = false;
-    }
-    if (imported.topK !== undefined) {
-      inferenceConfig.top_k = imported.topK;
-      topKInput.value = String(imported.topK);
-      topKValueSpan.textContent = String(imported.topK);
-    }
-    if (imported.topP !== undefined) {
-      inferenceConfig.top_p = imported.topP;
-      topPInput.value = String(imported.topP);
-      topPValueSpan.textContent = imported.topP.toFixed(2);
-    }
-    if (imported.maxTokens !== undefined) {
-      inferenceConfig.maxCompletionTokens = imported.maxTokens;
-      maxTokensInput.value = String(imported.maxTokens);
-    }
-    if (imported.stop && imported.stop.length > 0) {
-      inferenceConfig.stop = imported.stop;
-      stopSequencesInput.value = imported.stop.join('\n');
-    }
-    if (imported.tools) {
-      inferenceConfig.tools = imported.tools;
-      toolsInput.value = imported.tools;
-    }
-    if (imported.reasoningEffort) {
-      inferenceConfig.reasoningEffort = imported.reasoningEffort as InferenceConfig['reasoningEffort'];
-      reasoningSelect.value = imported.reasoningEffort;
-    }
-    await saveInferenceConfig(inferenceConfig);
-    updateConfigDots();
-
-    if (imported.messages.length > 0) {
-      const chat = getCurrentChat();
-      if (chat) {
-        chat.messages = imported.messages;
-        chat.updatedAt = Date.now();
-        await saveChat(chat);
-        messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-        renderMessages();
-      }
-    }
-
-    hideModal(importCurlModal);
-    curlInput.value = '';
-    hideModal(importPreview);
-
-  } catch (e) {
-    alert('Failed to import: ' + (e as Error).message);
-  }
-}
-
-async function openProvidersModal() {
-  providers = await getAllProviders();
-  renderProvidersList();
-  prefillProviderForm();
-  showModal(providersModal);
-}
-
-function prefillProviderForm() {
-  const endpoint = endpointInput.value.trim();
-  const model = modelNameInput.value.trim();
-  const apiKey = apiKeyInput.value.trim();
-
-  if (endpoint && model && apiKey) {
-    try {
-      const host = new URL(endpoint).hostname;
-      providerNameInput.value = `${model} from ${host}`;
-    } catch {
-      providerNameInput.value = model || '';
-    }
-    providerEndpointInput.value = endpoint;
-    providerModelInput.value = model;
-    providerApikeyInput.value = apiKey;
-  }
-}
-
-function closeProvidersModal() {
-  hideModal(providersModal);
-  clearProviderForm();
-}
-
-function clearProviderForm() {
-  editingProviderId = null;
-  providerNameInput.value = '';
-  providerEndpointInput.value = '';
-  providerModelInput.value = '';
-  providerApikeyInput.value = '';
-  providerSaveBtn.innerHTML = '<i class="ri-add-line"></i> Add Provider';
-}
-
-function renderProvidersList() {
-  if (providers.length === 0) {
-    providersList.innerHTML = '<div class="providers-empty">No providers saved yet</div>';
-    return;
-  }
-
-  providersList.innerHTML = '';
-
-  for (const provider of providers) {
-    const div = document.createElement('div');
-    div.className = 'provider-item';
-    div.innerHTML = `
-      <div class="provider-item-info">
-        <div class="provider-item-name">${escapeHtml(provider.name)}</div>
-        <div class="provider-item-details">
-          <span>${escapeHtml(provider.model)}</span>
-          <span>${escapeHtml(new URL(provider.endpoint).hostname)}</span>
-        </div>
-      </div>
-      <div class="provider-item-actions">
-        <button class="btn btn-icon btn-sm provider-edit-btn" title="Edit provider">
-          <i class="ri-pencil-line"></i>
-        </button>
-        <button class="btn btn-icon btn-sm provider-delete-btn" title="Delete provider">
-          <i class="ri-delete-bin-line"></i>
-        </button>
-        <button class="btn btn-icon btn-sm provider-select-btn" title="Use this provider">
-          <i class="ri-arrow-right-line"></i>
-        </button>
-      </div>
-    `;
-
-    div.querySelector('.provider-select-btn')?.addEventListener('click', () => selectProvider(provider));
-    div.querySelector('.provider-edit-btn')?.addEventListener('click', () => editProvider(provider));
-    div.querySelector('.provider-delete-btn')?.addEventListener('click', () => removeProvider(provider.id));
-
-    providersList.appendChild(div);
-  }
-}
-
-function selectProvider(provider: Provider) {
-  modelNameInput.value = provider.model;
-  endpointInput.value = provider.endpoint;
-  apiKeyInput.value = provider.apiKey;
-
-  modelConfig.name = provider.model;
-  modelConfig.endpoint = provider.endpoint;
-  modelConfig.apiKey = provider.apiKey;
-
-  saveModelConfigDebounced();
-  updateModelDisplay();
-  closeProvidersModal();
-}
-
-function editProvider(provider: Provider) {
-  editingProviderId = provider.id;
-  providerNameInput.value = provider.name;
-  providerEndpointInput.value = provider.endpoint;
-  providerModelInput.value = provider.model;
-  providerApikeyInput.value = provider.apiKey;
-  providerSaveBtn.innerHTML = '<i class="ri-save-line"></i> Update Provider';
-}
-
-async function saveOrUpdateProvider() {
-  const name = providerNameInput.value.trim();
-  const endpoint = providerEndpointInput.value.trim();
-  const model = providerModelInput.value.trim();
-  const apiKey = providerApikeyInput.value.trim();
-
-  if (!name || !endpoint || !model || !apiKey) {
-    showError('Please fill all provider fields');
-    return;
-  }
-
-  try {
-    new URL(endpoint);
-  } catch {
-    showError('Invalid endpoint URL');
-    return;
-  }
-
-  const provider: Provider = {
-    id: editingProviderId || crypto.randomUUID(),
+const PREDEFINED_TOOLS = {
+  webSearch: {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the web for information.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string', description: 'The search query.' } },
+        required: ['query'],
+      },
+    },
+  },
+  math: {
+    type: 'function',
+    function: {
+      name: 'calculate',
+      description: 'Evaluate a mathematical expression.',
+      parameters: {
+        type: 'object',
+        properties: { expression: { type: 'string', description: 'The math expression to evaluate.' } },
+        required: ['expression'],
+      },
+    },
+  },
+};
+
+const PREDEFINED_STRUCTURED_JSON = {
+  answer: {
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        schema: {
+          type: 'object',
+          properties: {
+            answer: { type: 'string' },
+          },
+          required: ['answer'],
+          additionalProperties: false,
+        },
+      },
+    },
+  },
+  answerWithConfidence: {
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        schema: {
+          type: 'object',
+          properties: {
+            answer: { type: 'string' },
+            confidence: { type: 'number' },
+          },
+          required: ['answer', 'confidence'],
+          additionalProperties: false,
+        },
+      },
+    },
+  },
+  answerWithCitations: {
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        schema: {
+          type: 'object',
+          properties: {
+            answer: { type: 'string' },
+            citations: {
+              type: 'array',
+              items: { type: 'string' },
+            },
+          },
+          required: ['answer', 'citations'],
+          additionalProperties: false,
+        },
+      },
+    },
+  },
+} as const;
+
+const STRUCTURED_JSON_PLACEHOLDER = JSON.stringify(PREDEFINED_STRUCTURED_JSON.answer, null, 2);
+
+type LibraryPreviewKind = 'image' | 'audio' | 'video' | 'pdf' | 'file';
+
+type LibraryItem = {
+  type: Attachment['type'];
+  name: string;
+  mimeType: string;
+  url: string;
+  previewKind: LibraryPreviewKind;
+  iconClass: string;
+};
+
+const LIBRARY_FILE_URLS = import.meta.glob('../medialib/*', {
+  eager: true,
+  import: 'default',
+  query: '?url',
+}) as Record<string, string>;
+
+const MIME_TYPES_BY_EXTENSION: Record<string, string> = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  svg: 'image/svg+xml',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  m4a: 'audio/mp4',
+  webm: 'audio/webm',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  json: 'application/json',
+};
+
+const SHARED_URL_PARAM_KEYS = {
+  endpoint: 'api-endpoint',
+  model: 'api-model',
+  apiKey: 'api-key',
+} as const;
+
+const LEGACY_SHARED_URL_PARAM_KEYS = {
+  endpoint: 'endpoint',
+  model: 'model',
+  apiKey: 'api_key',
+} as const;
+
+const ENDPOINT_PRESETS = [
+  { label: 'OpenAI', endpoint: 'https://api.openai.com/v1' },
+  { label: 'Google', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai' },
+  { label: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1' },
+  { label: 'Vercel AI Gateway', endpoint: 'https://ai-gateway.vercel.sh/v1' },
+  { label: 'Groq', endpoint: 'https://api.groq.com/openai/v1' },
+  { label: 'X.Ai', endpoint: 'https://api.x.ai/v1' },
+  { label: 'AIVAX', endpoint: 'https://inference.aivax.net/v1' },
+] as const;
+
+const SAMPLING_FALLBACKS = {
+  temperature: 1,
+  topP: 1,
+  frequencyPenalty: 0,
+  presencePenalty: 0,
+  maxTokens: 4096,
+} as const;
+
+const LIBRARY_ITEMS = Object.entries(LIBRARY_FILE_URLS)
+  .map(([path, url]) => createLibraryItem(path, url))
+  .filter((item): item is LibraryItem => item !== null)
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+let tabs: Tab[] = [];
+let activeTabId: string | null = null;
+let theme: 'light' | 'dark' = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+let pendingAttachments: Attachment[] = [];
+let mediaRecorder: MediaRecorder | null = null;
+let recording = false;
+let pendingToolResponseFocusId: string | null = null;
+
+const openToolResponseEditors = new Set<string>();
+const reasoningPartUserState = new Map<string, boolean>();
+
+function createLibraryItem(path: string, url: string): LibraryItem | null {
+  const normalizedPath = path.replace(/\\/g, '/');
+  const name = normalizedPath.split('/').pop();
+  if (!name) return null;
+
+  const mimeType = getMimeTypeFromName(name);
+  const previewKind = getLibraryPreviewKind(mimeType);
+
+  return {
+    type: getAttachmentTypeFromMime(mimeType),
     name,
-    endpoint,
-    model,
-    apiKey,
-    createdAt: editingProviderId ? (providers.find(p => p.id === editingProviderId)?.createdAt || Date.now()) : Date.now()
+    mimeType,
+    url,
+    previewKind,
+    iconClass: getLibraryIconClass(previewKind),
   };
-
-  await saveProvider(provider);
-  providers = await getAllProviders();
-  renderProvidersList();
-  clearProviderForm();
 }
 
-async function removeProvider(id: string) {
-  await deleteProvider(id);
-  providers = await getAllProviders();
-  renderProvidersList();
-
-  if (editingProviderId === id) {
-    clearProviderForm();
-  }
+function getMimeTypeFromName(name: string): string {
+  const ext = name.includes('.') ? name.split('.').pop()!.toLowerCase() : '';
+  return MIME_TYPES_BY_EXTENSION[ext] || 'application/octet-stream';
 }
 
-async function submitToolResponse() {
-  const chat = getCurrentChat();
-  if (!pendingToolCall || !chat) return;
-
-  const toolMsg: ChatMessage = {
-    id: crypto.randomUUID(),
-    role: 'tool',
-    content: toolResponse.value,
-    toolCallId: pendingToolCall.toolCall.id,
-    createdAt: Date.now()
-  };
-
-  chat.messages.push(toolMsg);
-  chat.updatedAt = Date.now();
-  await saveChat(chat);
-  renderMessages();
-
-  hideModal(toolModal);
-  pendingToolCall = null;
-
-  await sendToApi();
+function getAttachmentTypeFromMime(mimeType: string): Attachment['type'] {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  return 'file';
 }
 
-async function handleFileSelect(e: Event) {
-  const files = (e.target as HTMLInputElement).files;
-  if (!files) return;
+function getLibraryPreviewKind(mimeType: string): LibraryPreviewKind {
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType.startsWith('video/')) return 'video';
+  if (mimeType === 'application/pdf') return 'pdf';
+  return 'file';
+}
 
-  for (const file of Array.from(files)) {
-    const base64 = await fileToBase64(file);
-    const attachment: FileAttachment = {
-      id: crypto.randomUUID(),
-      name: file.name,
-      type: file.type,
-      data: base64,
-      size: file.size
-    };
-    pendingAttachments.push(attachment);
+function getLibraryIconClass(previewKind: LibraryPreviewKind): string {
+  if (previewKind === 'audio') return 'ri-music-2-line';
+  if (previewKind === 'video') return 'ri-film-line';
+  if (previewKind === 'pdf') return 'ri-file-pdf-line';
+  return 'ri-file-line';
+}
+
+async function urlToDataUrl(url: string): Promise<string> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to load media example: ${response.status}`);
   }
 
-  renderInputAttachments();
-  fileInput.value = '';
-}
-
-function openSampleMediaModal() {
-  renderSampleMediaList();
-  showModal(sampleMediaModal);
-}
-
-function renderSampleMediaList() {
-  sampleMediaList.innerHTML = '';
-
-  for (const item of SAMPLE_MEDIA_ITEMS) {
-    const div = document.createElement('div');
-    div.className = 'sample-media-item';
-    div.innerHTML = `
-      <div class="sample-media-item-info">
-        <div class="sample-media-item-title">
-          <i class="${item.icon}"></i>
-          <span>${escapeHtml(item.name)}</span>
-        </div>
-        <div class="sample-media-item-desc">${escapeHtml(item.description)}</div>
-      </div>
-      <button class="btn btn-secondary btn-sm sample-media-add-btn" data-id="${item.id}">
-        <i class="ri-add-line"></i>
-        <span>Add</span>
-      </button>
-    `;
-
-    sampleMediaList.appendChild(div);
-  }
-
-  sampleMediaList.querySelectorAll<HTMLButtonElement>('.sample-media-add-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const sampleId = btn.dataset.id;
-      if (!sampleId) return;
-      addSampleMediaAttachment(sampleId);
-    });
-  });
-}
-
-function addSampleMediaAttachment(sampleId: string) {
-  const sample = SAMPLE_MEDIA_ITEMS.find(item => item.id === sampleId);
-  if (!sample) return;
-
-  pendingAttachments.push({
-    id: crypto.randomUUID(),
-    name: sample.name,
-    type: sample.type,
-    data: sample.data,
-    size: getDataUrlByteSize(sample.data)
-  });
-
-  renderInputAttachments();
-}
-
-function getDataUrlByteSize(dataUrl: string): number {
-  const base64 = dataUrl.includes(',') ? (dataUrl.split(',')[1] || '') : dataUrl;
-
-  try {
-    return atob(base64).length;
-  } catch {
-    return 0;
-  }
-}
-
-function fileToBase64(file: File): Promise<string> {
+  const blob = await response.blob();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+    reader.onerror = () => reject(reader.error || new Error('Failed to read media example'));
+    reader.readAsDataURL(blob);
   });
 }
 
-function renderInputAttachments() {
-  inputAttachments.innerHTML = '';
-
-  for (const att of pendingAttachments) {
-    const div = document.createElement('div');
-    div.className = 'input-attachment';
-
-    if (att.type.startsWith('image/')) {
-      div.innerHTML = `
-        <img src="${att.data}" alt="${escapeHtml(att.name)}" />
-        <span>${escapeHtml(att.name)}</span>
-        <button class="input-attachment-remove" data-id="${att.id}">×</button>
-      `;
-    } else if (att.type.startsWith('audio/')) {
-      div.innerHTML = `
-        <span>🎵 ${escapeHtml(att.name)}</span>
-        <button class="input-attachment-remove" data-id="${att.id}">×</button>
-      `;
-    } else if (att.type.startsWith('video/')) {
-      div.innerHTML = `
-        <span>🎬 ${escapeHtml(att.name)}</span>
-        <button class="input-attachment-remove" data-id="${att.id}">×</button>
-      `;
-    } else {
-      div.innerHTML = `
-        <span>📎 ${escapeHtml(att.name)}</span>
-        <button class="input-attachment-remove" data-id="${att.id}">×</button>
-      `;
-    }
-
-    inputAttachments.appendChild(div);
-  }
-
-  inputAttachments.querySelectorAll('.input-attachment-remove').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const id = (e.target as HTMLButtonElement).dataset.id;
-      pendingAttachments = pendingAttachments.filter(a => a.id !== id);
-      renderInputAttachments();
-    });
-  });
-}
-
-async function handlePaste(e: ClipboardEvent) {
-  const items = e.clipboardData?.items;
-  if (!items) return;
-
-  const files: File[] = [];
-
-  for (const item of Array.from(items)) {
-    if (item.kind === 'file') {
-      const file = item.getAsFile();
-      if (file) {
-        files.push(file);
-      }
-    }
-  }
-
-  if (files.length === 0) return;
-
-  e.preventDefault();
-
-  for (const file of files) {
-    const base64 = await fileToBase64(file);
-    const attachment: FileAttachment = {
-      id: crypto.randomUUID(),
-      name: file.name,
-      type: file.type,
-      data: base64,
-      size: file.size
-    };
-    pendingAttachments.push(attachment);
-  }
-
-  renderInputAttachments();
-}
-
-async function sendMessage() {
-  const chat = getCurrentChat();
-  if (!chat || !chat.messages) return;
-
-  const content = userInput.value.trim();
-  if (!content && pendingAttachments.length === 0) return;
-  if (isStreaming) return;
-
-  const userMsg: ChatMessage = {
-    id: crypto.randomUUID(),
-    role: 'user',
-    content: content || null,
-    attachments: pendingAttachments.length > 0 ? [...pendingAttachments] : undefined,
-    createdAt: Date.now()
+async function createAttachmentFromLibraryItem(item: LibraryItem): Promise<Attachment> {
+  return {
+    type: item.type,
+    name: item.name,
+    mimeType: item.mimeType,
+    dataUrl: await urlToDataUrl(item.url),
   };
-
-  chat.messages.push(userMsg);
-
-  if (chat.messages.length === 1 && content) {
-    chat.title = content.slice(0, 30) + (content.length > 30 ? '...' : '');
-    renderTabs();
-  }
-
-  chat.updatedAt = Date.now();
-  await saveChat(chat);
-
-  userInput.value = '';
-  userInput.style.height = 'auto';
-  pendingAttachments = [];
-  renderInputAttachments();
-  renderMessages();
-
-  await sendToApi();
 }
 
-async function sendToApi() {
-  const chat = getCurrentChat();
-  if (!chat || !chat.messages) return;
+function getActiveTab(): Tab | undefined {
+  return tabs.find(t => t.id === activeTabId);
+}
 
-  if (!modelConfig.endpoint || !modelConfig.name) {
-    showError('Please configure model endpoint and name');
+function getReasoningPartKey(messageId: string, partIndex: number): string {
+  return `${messageId}:${partIndex}`;
+}
+
+function collapseLatestReasoningPart(msg: ChatMessage) {
+  const parts = ensureAssistantParts(msg);
+
+  for (let index = parts.length - 1; index >= 0; index--) {
+    if (parts[index].type === 'reasoning') {
+      reasoningPartUserState.delete(getReasoningPartKey(msg.id, index));
+      return;
+    }
+  }
+}
+
+function isReasoningPartAutoOpen(msg: ChatMessage, partIndex: number): boolean {
+  const parts = getAssistantParts(msg);
+  return !parts.slice(partIndex + 1).some(part => part.type !== 'reasoning');
+}
+
+function isReasoningPartOpen(msg: ChatMessage, partIndex: number): boolean {
+  const key = getReasoningPartKey(msg.id, partIndex);
+  const manualState = reasoningPartUserState.get(key);
+  if (manualState !== undefined) {
+    return manualState;
+  }
+
+  return isReasoningPartAutoOpen(msg, partIndex);
+}
+
+function setReasoningPartOpenState(msg: ChatMessage, partIndex: number, open: boolean) {
+  const key = getReasoningPartKey(msg.id, partIndex);
+  const autoOpen = isReasoningPartAutoOpen(msg, partIndex);
+
+  if (open === autoOpen) {
+    reasoningPartUserState.delete(key);
     return;
   }
 
-  isStreaming = true;
-  abortController = new AbortController();
-  setStatus('Streaming...', true);
-  hideModal(sendBtn);
-  showModal(stopBtn);
-
-  const assistantMsg: ChatMessage = {
-    id: crypto.randomUUID(),
-    role: 'assistant',
-    content: '',
-    createdAt: Date.now()
-  };
-  chat.messages.push(assistantMsg);
-  renderMessages();
-
-  const msgIndex = chat.messages.length - 1;
-  const msgEl = messagesContainer.querySelector(`.message[data-index="${msgIndex}"]`);
-
-  let spinnerEl: HTMLElement | null = null;
-  const showStreamingSpinner = () => {
-    if (!msgEl || spinnerEl) return;
-    spinnerEl = document.createElement('div');
-    spinnerEl.className = 'streaming-spinner';
-    spinnerEl.innerHTML = '<div class="streaming-spinner-icon"></div><span>Streaming...</span>';
-    msgEl.appendChild(spinnerEl);
-  };
-
-  const hideStreamingSpinner = () => {
-    if (spinnerEl) {
-      spinnerEl.remove();
-      spinnerEl = null;
-    }
-  };
-
-  showStreamingSpinner();
-
-  try {
-    const request: ChatRequest = buildRequest(modelConfig, inferenceConfig, chat.messages.slice(0, -1));
-    addDebugEntry('request', request);
-    let fullContent = '';
-    let fullReasoning = '';
-    const segments: MessageSegment[] = [];
-    let currentSegmentType: 'content' | 'reasoning' | null = null;
-    const toolCalls: Map<number, { id: string; type: string; name: string; arguments: string }> = new Map();
-    const startTime = performance.now();
-
-    for await (const event of streamChat(modelConfig, request, abortController!.signal)) {
-      addDebugEntry('sse-chunk', event);
-      const choice = event.choices[0];
-      if (!choice) continue;
-
-      if (choice.finish_reason === 'error' && event.error) {
-        throw new Error(`[${event.error.code}] ${event.error.message}`);
-      }
-
-      // Capture reasoning from API (DeepSeek, OpenAI o1, etc.)
-      const reasoningChunk = choice.delta.reasoning || choice.delta.reasoning_content;
-      if (reasoningChunk) {
-        fullReasoning += reasoningChunk;
-        chat.messages[msgIndex].reasoning = fullReasoning;
-
-        // Create new segment if switching from content to reasoning
-        if (currentSegmentType === 'content' && fullContent) {
-          segments.push({ type: 'content', text: fullContent });
-          fullContent = '';
-        }
-        currentSegmentType = 'reasoning';
-
-        // Live update reasoning during streaming
-        const liveSegments = [...segments];
-        if (fullReasoning) {
-          liveSegments.push({ type: 'reasoning', text: fullReasoning });
-        }
-        chat.messages[msgIndex].segments = liveSegments;
-        await updateMessageContent(msgIndex, liveSegments, currentSegmentType);
-      }
-
-      if (choice.delta.content) {
-        // Create new segment if switching from reasoning to content
-        if (currentSegmentType === 'reasoning' && fullReasoning) {
-          segments.push({ type: 'reasoning', text: fullReasoning });
-          fullReasoning = '';
-        }
-        currentSegmentType = 'content';
-
-        fullContent += choice.delta.content;
-        chat.messages[msgIndex].content = fullContent;
-
-        const typingIndicator = msgEl?.querySelector('.typing-indicator');
-        if (typingIndicator) {
-          typingIndicator.remove();
-        }
-
-        const liveSegments = [...segments];
-        if (fullContent) {
-          liveSegments.push({ type: 'content', text: fullContent });
-        }
-        chat.messages[msgIndex].segments = liveSegments;
-        await updateMessageContent(msgIndex, liveSegments, currentSegmentType);
-      }
-
-      if (choice.delta.tool_calls) {
-        for (const tc of choice.delta.tool_calls) {
-          const existing = toolCalls.get(tc.index);
-          if (existing) {
-            if (tc.function?.arguments) {
-              existing.arguments += tc.function.arguments;
-            }
-          } else {
-            toolCalls.set(tc.index, {
-              id: tc.id || '',
-              type: tc.type || 'function',
-              name: tc.function?.name || '',
-              arguments: tc.function?.arguments || ''
-            });
-          }
-        }
-      }
-
-      if (event.usage) {
-        const responseTimeMs = performance.now() - startTime;
-        const tokensPerSecond = event.usage.completion_tokens / (responseTimeMs / 1000);
-        const usage: TokenUsage = {
-          promptTokens: event.usage.prompt_tokens,
-          completionTokens: event.usage.completion_tokens,
-          cachedTokens: event.usage.prompt_tokens_details?.cached_tokens,
-          responseTimeMs,
-          tokensPerSecond
-        };
-        chat.messages[msgIndex].usage = usage;
-      }
-    }
-
-    addDebugEntry('sse-done', { status: 'completed' });
-
-    // Finalize last segment
-    if (currentSegmentType === 'content' && fullContent) {
-      segments.push({ type: 'content', text: fullContent });
-    } else if (currentSegmentType === 'reasoning' && fullReasoning) {
-      segments.push({ type: 'reasoning', text: fullReasoning });
-    }
-
-    // Extract ALL <think>...</think> tags from content if no API reasoning was provided
-    if (segments.length === 0 && fullContent) {
-      const extractedSegments: MessageSegment[] = [];
-      const thinkRegex = /<think>([\s\S]*?)<\/think>/g;
-      let lastIndex = 0;
-      let match;
-
-      while ((match = thinkRegex.exec(fullContent)) !== null) {
-        // Add content before this <think> block
-        if (match.index > lastIndex) {
-          const contentBefore = fullContent.slice(lastIndex, match.index).trim();
-          if (contentBefore) {
-            extractedSegments.push({ type: 'content', text: contentBefore });
-          }
-        }
-        // Add reasoning block
-        extractedSegments.push({ type: 'reasoning', text: match[1].trim() });
-        lastIndex = thinkRegex.lastIndex;
-      }
-
-      // Add remaining content after last <think> block
-      if (lastIndex < fullContent.length) {
-        const contentAfter = fullContent.slice(lastIndex).trim();
-        if (contentAfter) {
-          extractedSegments.push({ type: 'content', text: contentAfter });
-        }
-      }
-
-      if (extractedSegments.length > 0) {
-        segments.push(...extractedSegments);
-        // Clear old fields for backward compat display
-        fullContent = '';
-        fullReasoning = '';
-      }
-    }
-
-    // Store segments if any were created
-    if (segments.length > 0) {
-      chat.messages[msgIndex].segments = segments;
-      // Keep legacy fields for backward compatibility
-      chat.messages[msgIndex].content = segments.filter(s => s.type === 'content').map(s => s.text).join('\n\n');
-      chat.messages[msgIndex].reasoning = segments.filter(s => s.type === 'reasoning').map(s => s.text).join('\n\n');
-    }
-
-    if (toolCalls.size > 0) {
-      chat.messages[msgIndex].toolCalls = Array.from(toolCalls.values()).map(tc => ({
-        id: tc.id,
-        type: 'function' as const,
-        function: {
-          name: tc.name,
-          arguments: tc.arguments
-        }
-      }));
-    }
-
-    chat.updatedAt = Date.now();
-    await saveChat(chat);
-
-    hideStreamingSpinner();
-    messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-    renderMessages();
-
-  } catch (err) {
-    hideStreamingSpinner();
-    if (err instanceof Error && err.name === 'AbortError') {
-      addDebugEntry('error', { type: 'abort', message: 'Interrupted by user' });
-      chat.messages[msgIndex].content = (chat.messages[msgIndex].content || '') + ' [Interrupted by user]';
-      await saveChat(chat);
-      messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-      renderMessages();
-    } else {
-      addDebugEntry('error', { message: err instanceof Error ? err.message : 'Unknown error' });
-      chat.messages.pop();
-      await saveChat(chat);
-      messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-      renderMessages();
-      showError(err instanceof Error ? err.message : 'Unknown error');
-    }
-  }
-
-  isStreaming = false;
-  abortController = null;
-  setStatus('Ready', false);
-  showModal(sendBtn);
-  hideModal(stopBtn);
+  reasoningPartUserState.set(key, open);
 }
 
-function setStatus(text: string, streaming: boolean) {
-  statusText.textContent = text;
-  if (streaming) {
-    statusDot.classList.add('connected');
+function clearReasoningStateForMessages(messages: ChatMessage[]) {
+  for (const msg of messages) {
+    if (msg.role !== 'assistant') continue;
+
+    for (const key of Array.from(reasoningPartUserState.keys())) {
+      if (key.startsWith(`${msg.id}:`)) {
+        reasoningPartUserState.delete(key);
+      }
+    }
   }
 }
 
-function showError(message: string) {
-  const existing = document.querySelector('.error-toast');
-  if (existing) existing.remove();
+function getAssistantParts(msg: ChatMessage): AssistantMessagePart[] {
+  const parts = msg.parts ? [...msg.parts] : [];
 
-  const div = document.createElement('div');
-  div.className = 'error-toast';
-  div.textContent = message;
-  document.body.appendChild(div);
+  if (parts.length === 0 && msg.content) {
+    parts.push({ type: 'content', text: msg.content });
+  }
 
-  setTimeout(() => div.remove(), 5000);
+  if (msg.toolCalls?.length) {
+    for (let index = 0; index < msg.toolCalls.length; index++) {
+      const hasMarker = parts.some(part => part.type === 'tool-call' && part.index === index);
+      if (!hasMarker) {
+        parts.push({ type: 'tool-call', index });
+      }
+    }
+  }
+
+  return parts;
 }
 
-function resetParameters() {
-  systemPromptInput.value = '';
-  tempEnabledInput.checked = true;
-  temperatureInput.value = '1';
-  temperatureInput.disabled = false;
-  tempValueSpan.textContent = '1.0';
-  topKInput.value = '0';
-  topKValueSpan.textContent = '0';
-  topPInput.value = '0';
-  topPValueSpan.textContent = '0.00';
-  reasoningSelect.value = 'null';
-  maxTokensInput.value = '';
-  stopSequencesInput.value = '';
-  toolsInput.value = '';
-  structuredJsonInput.value = '';
-  extraBodyInput.value = '';
-  toolsInput.classList.remove('error');
-  structuredJsonInput.classList.remove('error');
-  extraBodyInput.classList.remove('error');
-  updateConfigDots();
-  saveInferenceConfigDebounced();
+function ensureAssistantParts(msg: ChatMessage): AssistantMessagePart[] {
+  if (!msg.parts) {
+    msg.parts = [];
+  }
+  return msg.parts;
 }
 
-async function clearChat() {
-  const chat = getCurrentChat();
-  if (!chat) return;
+function appendAssistantTextPart(msg: ChatMessage, type: 'content' | 'reasoning', text: string) {
+  if (!text) return;
 
-  chat.messages = [];
-  chat.title = 'New Chat';
-  chat.updatedAt = Date.now();
-  await saveChat(chat);
-  clearDebugEntries();
-  messagesContainer.querySelectorAll('.message').forEach(el => el.remove());
-  renderMessages();
-  renderTabs();
-}
+  const parts = ensureAssistantParts(msg);
+  const lastPart = parts[parts.length - 1];
 
-function stopStreaming() {
-  if (abortController && isStreaming) {
-    abortController.abort();
+  if (type !== 'reasoning') {
+    collapseLatestReasoningPart(msg);
+  }
+
+  if (lastPart && lastPart.type === type) {
+    lastPart.text += text;
+  } else {
+    parts.push({ type, text });
+  }
+
+  if (type === 'content') {
+    msg.content += text;
   }
 }
 
-function toggleTheme() {
-  const current = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
-  const next = current === 'dark' ? 'light' : 'dark';
-  applyTheme(next);
-  localStorage.setItem(THEME_STORAGE_KEY, next);
-}
-
-function applyTheme(theme: 'dark' | 'light') {
-  document.documentElement.dataset.theme = theme;
-}
-
-function getSavedTheme(): 'dark' | 'light' | null {
-  const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
-  if (savedTheme === 'dark' || savedTheme === 'light') {
-    return savedTheme;
+function appendAssistantToolCallPart(msg: ChatMessage, index: number) {
+  const parts = ensureAssistantParts(msg);
+  collapseLatestReasoningPart(msg);
+  const hasMarker = parts.some(part => part.type === 'tool-call' && part.index === index);
+  if (!hasMarker) {
+    parts.push({ type: 'tool-call', index });
   }
+}
+
+function hasAssistantRenderableOutput(msg: ChatMessage): boolean {
+  return getAssistantParts(msg).some(part => {
+    if (part.type === 'tool-call') {
+      return true;
+    }
+    return part.text.trim().length > 0;
+  });
+}
+
+function getContinuableAssistantMessage(tab: Tab): ChatMessage | null {
+  let index = tab.messages.length - 1;
+
+  while (index >= 0 && tab.messages[index].role === 'tool') {
+    index--;
+  }
+
+  const msg = tab.messages[index];
+  if (msg?.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
+    return msg;
+  }
+
   return null;
 }
 
-function getBrowserPreferredTheme(): 'dark' | 'light' {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+function getToolResponseEditorKey(tabId: string, toolCallId: string): string {
+  return `${tabId}:${toolCallId}`;
 }
 
-function initTheme() {
-  const savedTheme = getSavedTheme();
-  applyTheme(savedTheme ?? getBrowserPreferredTheme());
+function isToolResponseEditorOpen(tab: Tab, toolCallId: string): boolean {
+  return openToolResponseEditors.has(getToolResponseEditorKey(tab.id, toolCallId));
+}
 
-  const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-  mediaQuery.addEventListener('change', (event) => {
-    if (getSavedTheme()) {
-      return;
+function openToolResponseEditor(tab: Tab, toolCallId: string) {
+  openToolResponseEditors.add(getToolResponseEditorKey(tab.id, toolCallId));
+  pendingToolResponseFocusId = `tool-resp-${toolCallId}`;
+  render();
+}
+
+function closeToolResponseEditor(tab: Tab, toolCallId: string) {
+  openToolResponseEditors.delete(getToolResponseEditorKey(tab.id, toolCallId));
+}
+
+function clearToolResponseEditorsForTab(tabId: string) {
+  for (const key of Array.from(openToolResponseEditors)) {
+    if (key.startsWith(`${tabId}:`)) {
+      openToolResponseEditors.delete(key);
     }
-    applyTheme(event.matches ? 'dark' : 'light');
+  }
+}
+
+function persist() {
+  saveState(tabs, activeTabId, theme);
+}
+
+function createTabWithInitialConfig(initialConfig?: Partial<Pick<TabConfig, 'model' | 'endpoint' | 'apiKey'>>): Tab {
+  const tab = createTab();
+  if (!initialConfig) return tab;
+
+  if (initialConfig.model !== undefined) tab.config.model = initialConfig.model;
+  if (initialConfig.endpoint !== undefined) tab.config.endpoint = initialConfig.endpoint;
+  if (initialConfig.apiKey !== undefined) tab.config.apiKey = initialConfig.apiKey;
+
+  return tab;
+}
+
+function init() {
+  const saved = loadState();
+  if (saved) {
+    tabs = saved.tabs;
+    activeTabId = saved.activeTabId;
+    theme = saved.theme || theme;
+  }
+
+  parseUrlParams();
+
+  if (tabs.length === 0) {
+    const t = createTab();
+    tabs.push(t);
+    activeTabId = t.id;
+  }
+  if (!activeTabId) activeTabId = tabs[0].id;
+
+  applyTheme();
+  render();
+}
+
+function parseUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+  const model = params.get(SHARED_URL_PARAM_KEYS.model) ?? params.get(LEGACY_SHARED_URL_PARAM_KEYS.model);
+  const endpoint = params.get(SHARED_URL_PARAM_KEYS.endpoint) ?? params.get(LEGACY_SHARED_URL_PARAM_KEYS.endpoint);
+  const apiKey = params.get(SHARED_URL_PARAM_KEYS.apiKey) ?? params.get(LEGACY_SHARED_URL_PARAM_KEYS.apiKey);
+
+  if (model || endpoint || apiKey) {
+    const t = createTabWithInitialConfig({
+      model: model ?? undefined,
+      endpoint: endpoint ?? undefined,
+      apiKey: apiKey ?? undefined,
+    });
+    tabs.push(t);
+    activeTabId = t.id;
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+}
+
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', theme);
+}
+
+function toggleTheme() {
+  theme = theme === 'light' ? 'dark' : 'light';
+  applyTheme();
+  persist();
+  render();
+}
+
+function addTab(initialConfig?: Partial<Pick<TabConfig, 'model' | 'endpoint' | 'apiKey'>>) {
+  const t = createTabWithInitialConfig(initialConfig);
+  tabs.push(t);
+  activeTabId = t.id;
+  pendingAttachments = [];
+  persist();
+  render();
+}
+
+function closeTab(id: string) {
+  const tab = tabs.find(t => t.id === id);
+  const replacementTabConfig = tabs.length === 1 && tab
+    ? {
+      model: tab.config.model,
+      endpoint: tab.config.endpoint,
+      apiKey: tab.config.apiKey,
+    }
+    : undefined;
+
+  if (tab?.abortController) tab.abortController.abort();
+  clearToolResponseEditorsForTab(id);
+  if (tab) clearReasoningStateForMessages(tab.messages);
+  tabs = tabs.filter(t => t.id !== id);
+  if (activeTabId === id) {
+    activeTabId = tabs.length > 0 ? tabs[tabs.length - 1].id : null;
+  }
+  if (tabs.length === 0) {
+    const replacementTab = createTabWithInitialConfig(replacementTabConfig);
+    tabs.push(replacementTab);
+    activeTabId = replacementTab.id;
+  }
+  pendingAttachments = [];
+  persist();
+  render();
+}
+
+function cloneTab(id: string) {
+  const src = tabs.find(t => t.id === id);
+  if (!src) return;
+  const nt = createTab();
+  nt.messages = JSON.parse(JSON.stringify(src.messages));
+  nt.config = normalizeTabConfig(JSON.parse(JSON.stringify(src.config)));
+  tabs.push(nt);
+  activeTabId = nt.id;
+  persist();
+  render();
+}
+
+function switchTab(id: string) {
+  activeTabId = id;
+  pendingAttachments = [];
+  persist();
+  render();
+}
+
+function closeAllTabs() {
+  for (const t of tabs) {
+    if (t.abortController) t.abortController.abort();
+    clearToolResponseEditorsForTab(t.id);
+    clearReasoningStateForMessages(t.messages);
+  }
+  tabs = [];
+  pendingAttachments = [];
+  addTab();
+}
+
+function clearCurrentChat() {
+  const tab = getActiveTab();
+  if (!tab || (tab.messages.length === 0 && pendingAttachments.length === 0)) return;
+
+  const confirmed = window.confirm('Clear the current chat? This will remove all messages from the active tab.');
+  if (!confirmed) return;
+
+  if (tab.abortController) tab.abortController.abort();
+  clearReasoningStateForMessages(tab.messages);
+  tab.messages = [];
+  tab.streaming = false;
+  tab.abortController = undefined;
+  clearToolResponseEditorsForTab(tab.id);
+  pendingAttachments = [];
+  persist();
+  render();
+}
+
+// ── Render ──
+
+function render() {
+  const app = document.getElementById('app')!;
+  app.innerHTML = '';
+  app.appendChild(renderApp());
+  scrollChatToBottom();
+  focusPendingToolResponseEditor();
+}
+
+function focusPendingToolResponseEditor() {
+  if (!pendingToolResponseFocusId) return;
+
+  const focusId = pendingToolResponseFocusId;
+  pendingToolResponseFocusId = null;
+
+  requestAnimationFrame(() => {
+    const textarea = document.getElementById(focusId) as HTMLTextAreaElement | null;
+    if (!textarea) return;
+    textarea.focus();
+    const cursor = textarea.value.length;
+    textarea.setSelectionRange(cursor, cursor);
+    textarea.scrollIntoView({ block: 'center' });
   });
 }
+
+function renderApp(): HTMLElement {
+  return el('div.app-container',
+    renderTabStrip(),
+    renderContent(),
+  );
+}
+
+// ── Tab Strip ──
+
+function renderTabStrip(): HTMLElement {
+  const activeTab = getActiveTab();
+  const canClearChat = Boolean(activeTab && (activeTab.messages.length > 0 || pendingAttachments.length > 0));
+
+  const tabEls = tabs.map(tab => {
+    const isActive = tab.id === activeTabId;
+    const label = `${tab.config.model}`;
+    let endpoint: string;
+    try { endpoint = new URL(tab.config.endpoint).host; } catch { endpoint = tab.config.endpoint; }
+
+    return el(`div.tab${isActive ? '.active' : ''}`,
+      { onClick: () => switchTab(tab.id) },
+      el('span.tab-label',
+        el('span.tab-model', label),
+        el('span.tab-provider', ` — ${endpoint}`),
+      ),
+      el('span.tab-actions',
+        el('button.tab-btn', { title: 'Clone', onClick: (e: Event) => { e.stopPropagation(); cloneTab(tab.id); } },
+          el('i.ri-file-copy-line'),
+        ),
+        el('button.tab-btn', { title: 'Close', onClick: (e: Event) => { e.stopPropagation(); closeTab(tab.id); } },
+          el('i.ri-close-line'),
+        ),
+      ),
+    );
+  });
+
+  return el('div.tab-strip',
+    el('div.tab-strip-main',
+      el('div.tab-strip-tabs', ...tabEls),
+      el('button.tab-strip-btn.tab-strip-add-btn', { title: 'New tab', onClick: addTab },
+        el('i.ri-add-line'),
+      ),
+    ),
+    el('div.tab-strip-actions',
+      el('button.tab-strip-btn', {
+        title: 'Clear current chat',
+        onClick: clearCurrentChat,
+        ...(canClearChat ? {} : { disabled: 'true' }),
+      },
+        el('i.ri-delete-bin-line'),
+      ),
+      el('button.tab-strip-btn', { title: 'Theme', onClick: toggleTheme },
+        el('i', { class: theme === 'light' ? 'ri-moon-line' : 'ri-sun-line' }),
+      ),
+      el('button.tab-strip-btn', { title: 'View LLM Playground Repository', onClick() { window.open('https://github.com/aivaxlabs/playground', '_blank') } },
+        el('i.ri-github-fill'),
+      ),
+      el('button.tab-strip-btn', { title: 'Options', onClick: showOptionsMenu },
+        el('i.ri-more-2-fill'),
+      ),
+    ),
+  );
+}
+
+// ── Options Menu ──
+
+function showOptionsMenu() {
+  removeOverlay();
+  const tab = getActiveTab();
+  if (!tab) return;
+
+  const menu = el('div.dropdown-menu',
+    el('button.dropdown-item', { onClick: () => { removeOverlay(); exportChat(tab); } },
+      el('i.ri-download-line'), ' Export chat (JSON)'),
+    el('button.dropdown-item', { onClick: () => { removeOverlay(); showCurlModal(tab); } },
+      el('i.ri-code-line'), ' View code (cURL)'),
+    el('button.dropdown-item', { onClick: () => { removeOverlay(); void shareParameters(tab); } },
+      el('i.ri-share-forward-line'), ' Share parameters'),
+    el('button.dropdown-item', { onClick: () => { removeOverlay(); closeAllTabs(); } },
+      el('i.ri-close-circle-line'), ' Close all tabs'),
+  );
+
+  showOverlay(menu);
+}
+
+function buildShareParametersUrl(tab: Tab): string {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.searchParams.set(SHARED_URL_PARAM_KEYS.endpoint, tab.config.endpoint);
+  url.searchParams.set(SHARED_URL_PARAM_KEYS.model, tab.config.model);
+
+  if (tab.config.apiKey) {
+    url.searchParams.set(SHARED_URL_PARAM_KEYS.apiKey, tab.config.apiKey);
+  }
+
+  return url.toString();
+}
+
+async function shareParameters(tab: Tab) {
+  await navigator.clipboard.writeText(buildShareParametersUrl(tab));
+}
+
+function exportChat(tab: Tab) {
+  const data = JSON.stringify({ messages: tab.messages, config: tab.config }, null, 2);
+  downloadString(data, `chat-${tab.config.model}-${Date.now()}.json`, 'application/json');
+}
+
+function downloadString(content: string, filename: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function showCurlModal(tab: Tab) {
+  let includeKey = false;
+  let useGeneric = false;
+
+  function getStructuredResponseFormat(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const responseFormat = (value as Record<string, unknown>).response_format;
+    return responseFormat && typeof responseFormat === 'object' && !Array.isArray(responseFormat)
+      ? (responseFormat as Record<string, unknown>)
+      : null;
+  }
+
+  function buildCurl() {
+    const cfg = tab.config;
+    const url = cfg.endpoint.replace(/\/+$/, '') + '/chat/completions';
+    const msgs = useGeneric
+      ? [{ role: 'user', content: 'Hello!' }]
+      : tab.messages.map(m => ({ role: m.role, content: m.content }));
+
+    const body: any = { model: cfg.model, messages: msgs, stream: true };
+    const responseFormat = getStructuredResponseFormat(cfg.structuredJson);
+
+    if (responseFormat) {
+      body.response_format = responseFormat;
+    }
+
+    const bodyStr = JSON.stringify(body, null, 2);
+    const authHeader = includeKey && cfg.apiKey
+      ? `\n  -H "Authorization: Bearer ${cfg.apiKey}" \\`
+      : `\n  -H "Authorization: Bearer YOUR_API_KEY" \\`;
+
+    return `curl "${url}" \\
+  -H "Content-Type: application/json" \\${authHeader}
+  -d '${bodyStr}'`;
+  }
+
+  function renderModal() {
+    removeOverlay();
+    const code = buildCurl();
+    const modal = el('div.modal',
+      el('div.modal-header',
+        el('h3', 'cURL Code'),
+        el('button.modal-close', { onClick: removeOverlay }, el('i.ri-close-line')),
+      ),
+      el('div.modal-body',
+        el('label.checkbox-label',
+          el('input', { type: 'checkbox', ...(includeKey ? { checked: 'true' } : {}), onChange: (e: Event) => { includeKey = (e.target as HTMLInputElement).checked; renderModal(); } }),
+          ' Include API key',
+        ),
+        el('label.checkbox-label',
+          el('input', { type: 'checkbox', ...(useGeneric ? { checked: 'true' } : {}), onChange: (e: Event) => { useGeneric = (e.target as HTMLInputElement).checked; renderModal(); } }),
+          ' Use generic chat (Hello World)',
+        ),
+        el('pre.code-block', code),
+      ),
+      el('div.modal-footer',
+        el('button.btn', { onClick: () => { navigator.clipboard.writeText(code); } },
+          el('i.ri-clipboard-line'), ' Copy'),
+      ),
+    );
+    showOverlay(modal);
+  }
+
+  renderModal();
+}
+
+// ── Content ──
+
+function renderContent(): HTMLElement {
+  const tab = getActiveTab();
+  if (!tab) return el('div');
+
+  return el('div.content',
+    renderChat(tab),
+    renderInput(tab),
+  );
+}
+
+// ── Chat Messages ──
+
+function renderChat(tab: Tab): HTMLElement {
+  const chat = el('div.chat-area');
+
+  if (tab.messages.length === 0) {
+    chat.appendChild(renderSuggestions(tab));
+  }
+
+  for (const msg of tab.messages) {
+    if (msg.role === 'user') chat.appendChild(renderUserMessage(tab, msg));
+    else if (msg.role === 'assistant') {
+      chat.appendChild(renderAssistantMessage(tab, msg));
+    }
+    else if (msg.role === 'tool') {
+      if (!msg.toolCallId || !isToolResponseEditorOpen(tab, msg.toolCallId)) {
+        chat.appendChild(renderToolMessage(tab, msg));
+      }
+    }
+  }
+
+  const continuableMsg = getContinuableAssistantMessage(tab);
+  if (continuableMsg && !tab.streaming) {
+    const allAnswered = continuableMsg.toolCalls!.every(tc =>
+      tab.messages.some(m => m.role === 'tool' && m.toolCallId === tc.id)
+    );
+    const hasOpenEditor = continuableMsg.toolCalls!.some(tc => tc.id && isToolResponseEditorOpen(tab, tc.id));
+    if (allAnswered && !hasOpenEditor) {
+      chat.appendChild(el('div.tool-continue-row',
+        el('button.btn.btn-primary', {
+          onClick: () => sendMessage(tab, undefined, true),
+        }, 'Continue'),
+      ));
+    }
+  }
+
+  if (tab.streaming) {
+    chat.appendChild(el('div.streaming-indicator',
+      el('span.dot'), el('span.dot'), el('span.dot'),
+    ));
+  }
+
+  return el('div.chat-scroll', { id: 'chat-scroll' }, chat);
+}
+
+function renderSuggestions(tab: Tab): HTMLElement {
+  return el('div.suggestions',
+    el('h2.suggestions-title', 'LLM Playground'),
+    el('div.suggestions-grid',
+      ...SUGGESTIONS.map(s =>
+        el('button.suggestion-card', { onClick: () => sendMessage(tab, s) }, s)
+      ),
+    ),
+  );
+}
+
+function renderUserMessage(tab: Tab, msg: ChatMessage): HTMLElement {
+  const bubble = el('div.message.message-user',
+    el('div.message-bubble.user-bubble',
+      msg.attachments && msg.attachments.length > 0
+        ? el('div.message-attachments', ...msg.attachments.map(renderAttachmentThumb))
+        : null,
+      el('div.message-text', { style: { whiteSpace: 'pre-wrap' } }, msg.content),
+    ),
+    el('div.message-actions',
+      el('button.msg-action-btn.msg-action-icon-btn', { title: 'Edit', onClick: () => editUserMessage(tab, msg) },
+        el('i.ri-pencil-line')),
+      el('button.msg-action-btn.msg-action-icon-btn', { title: 'Retry from here', onClick: () => retryFromMessage(tab, msg) },
+        el('i.ri-refresh-line')),
+    ),
+  );
+  return bubble;
+}
+
+function renderAssistantMessage(tab: Tab, msg: ChatMessage): HTMLElement {
+  if (!hasAssistantRenderableOutput(msg)) {
+    return el('div.message.message-assistant', { 'data-message-id': msg.id, style: { display: 'none' } });
+  }
+
+  const stream = el('div.assistant-stream',
+    ...getAssistantParts(msg).map((part, partIndex) => renderAssistantPart(tab, msg, part, partIndex)),
+  );
+
+  const actions = el('div.message-meta-row',
+    el('div.message-actions',
+      el('button.msg-action-btn.msg-action-icon-btn', { title: 'Copy', onClick: () => navigator.clipboard.writeText(msg.content) },
+        el('i.ri-clipboard-line')),
+      el('button.msg-action-btn.msg-action-icon-btn', { title: 'Retry', onClick: () => retryAssistant(tab, msg) },
+        el('i.ri-refresh-line')),
+      msg.metrics
+        ? el('button.msg-action-btn.msg-action-icon-btn', { title: 'Metrics', onClick: (e: Event) => showMetricsPopover(e, msg.metrics!) },
+          el('i.ri-information-line'))
+        : null,
+    ),
+    el('span.message-model-chip', { title: msg.model || tab.config.model }, msg.model || tab.config.model),
+  );
+
+  return el('div.message.message-assistant', { 'data-message-id': msg.id },
+    stream,
+    actions,
+  );
+}
+
+function renderAssistantPart(tab: Tab, msg: ChatMessage, part: AssistantMessagePart, partIndex: number): HTMLElement | null {
+  if (part.type === 'content') {
+    return renderAssistantContentPart(part.text);
+  }
+
+  if (part.type === 'reasoning') {
+    return renderAssistantReasoningPart(msg, partIndex, part.text);
+  }
+
+  const toolCall = msg.toolCalls?.[part.index];
+  if (!toolCall) return null;
+
+  const existingResponse = toolCall.id
+    ? tab.messages.find(m => m.role === 'tool' && m.toolCallId === toolCall.id)
+    : undefined;
+
+  if (toolCall.id && existingResponse && !isToolResponseEditorOpen(tab, toolCall.id)) {
+    return null;
+  }
+
+  return renderToolCallBubble(tab, toolCall, part.index);
+}
+
+function tryFormatAssistantJson(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return null;
+  }
+}
+
+function renderAssistantContentPart(text: string): HTMLElement {
+  const formattedJson = tryFormatAssistantJson(text);
+  if (formattedJson) {
+    return el('div.message-bubble.assistant-bubble.assistant-content-block',
+      el('div.message-content',
+        el('pre', el('code', formattedJson)),
+      ),
+    );
+  }
+
+  const contentEl = el('div.message-content');
+  contentEl.innerHTML = renderMarkdown(text);
+
+  return el('div.message-bubble.assistant-bubble.assistant-content-block', contentEl);
+}
+
+function renderAssistantReasoningPart(msg: ChatMessage, partIndex: number, text: string): HTMLElement {
+  const isOpen = isReasoningPartOpen(msg, partIndex);
+
+  return el(`details.assistant-thinking${isOpen ? '[open=true]' : ''}`,
+    {
+      onToggle: (event: Event) => {
+        const details = event.currentTarget as HTMLDetailsElement;
+        setReasoningPartOpenState(msg, partIndex, details.open);
+      },
+    },
+    el('summary.assistant-thinking-summary',
+      el('span.assistant-thinking-caret', '›'),
+      el('div.assistant-thinking-label',
+        el('span.assistant-thinking-dot'),
+        el('span', 'Thinking'),
+      ),
+    ),
+    el('div.assistant-thinking-body', { style: { whiteSpace: 'pre-wrap' } }, text),
+  );
+}
+
+function renderToolMessage(tab: Tab, msg: ChatMessage): HTMLElement {
+  return el('div.message.message-tool',
+    el('div.message-bubble.tool-bubble',
+      el('div.tool-info',
+        el('span.tool-label', `Tool response: ${msg.toolCallId || 'unknown'}`),
+      ),
+      el('div.tool-content', { style: { whiteSpace: 'pre-wrap' } }, msg.content),
+      el('button.msg-action-btn.msg-action-text-btn', {
+        title: 'Edit response',
+        onClick: () => editToolResponse(tab, msg),
+      }, el('i.ri-pencil-line'), ' Edit'),
+    ),
+  );
+}
+
+function getToolCallEditorId(tab: Tab, tc: ToolCall, toolCallIndex?: number): string {
+  const toolCallKey = tc.id || `${tab.id}-tool-call-${toolCallIndex ?? 0}`;
+  return `tool-resp-${toolCallKey}`;
+}
+
+function renderToolCallBubble(tab: Tab, tc: ToolCall, toolCallIndex?: number): HTMLElement {
+  let args = '';
+  try { args = JSON.stringify(JSON.parse(tc.function.arguments), null, 2); } catch { args = tc.function.arguments; }
+  const existingResponse = tc.id
+    ? tab.messages.find(m => m.role === 'tool' && m.toolCallId === tc.id)
+    : undefined;
+  const isEditing = Boolean(existingResponse);
+  const editorId = getToolCallEditorId(tab, tc, toolCallIndex);
+  const canSubmit = Boolean(tc.id);
+
+  const textarea = el('textarea.tool-response-input', {
+    placeholder: 'Tool response...',
+    rows: '3',
+    id: editorId,
+    ...(canSubmit ? {} : { disabled: 'true' }),
+  }) as HTMLTextAreaElement;
+
+  if (existingResponse) {
+    textarea.value = existingResponse.content;
+  }
+
+  return el('div.message.message-tool-call',
+    el('div.message-bubble.tool-call-bubble',
+      el('div.tool-call-header',
+        el('i.ri-tools-line'),
+        el('strong', ` ${tc.function.name || 'Tool call'}`),
+      ),
+      el('pre.tool-call-args', args || (tab.streaming ? 'Streaming tool call...' : '{}')),
+      textarea,
+      el('div', { style: { display: 'flex', gap: '8px' } },
+        el(`button.btn.btn-sm${isEditing ? '' : '.btn-primary'}`, {
+          ...(canSubmit ? {} : { disabled: 'true' }),
+          onClick: () => {
+            if (!tc.id) return;
+            const val = (document.getElementById(editorId) as HTMLTextAreaElement | null)?.value || '';
+            submitToolResponse(tab, tc.id, val);
+          },
+        }, isEditing ? 'Save' : 'Submit'),
+        isEditing
+          ? el('button.btn.btn-sm', {
+            onClick: () => {
+              closeToolResponseEditor(tab, tc.id);
+              render();
+            },
+          }, 'Cancel')
+          : null,
+      ),
+    ),
+  );
+}
+
+function renderAttachmentThumb(att: Attachment): HTMLElement {
+  if (att.type === 'image') {
+    return el('img.attachment-thumb', { src: att.dataUrl, alt: att.name });
+  }
+  if (att.type === 'audio') {
+    return el('audio.attachment-audio', { src: att.dataUrl, controls: 'true' });
+  }
+  return el('div.attachment-file',
+    el('i.ri-file-line'),
+    el('span', att.name),
+  );
+}
+
+function showMetricsPopover(e: Event, metrics: MessageMetrics) {
+  removeOverlay();
+  const modal = el('div.modal.modal-sm',
+    el('div.modal-header',
+      el('h3', 'Response Metrics'),
+      el('button.modal-close', { onClick: removeOverlay }, el('i.ri-close-line')),
+    ),
+    el('div.modal-body',
+      el('div.metrics-grid',
+        metricRow('Tokens/sec', metrics.tokensPerSecond?.toFixed(2)),
+        metricRow('Time to first token', metrics.timeToFirstToken ? `${metrics.timeToFirstToken}ms` : '-'),
+        metricRow('Total time', metrics.totalTime ? `${metrics.totalTime}ms` : '-'),
+        metricRow('Input tokens', metrics.inputTokens),
+        metricRow('Cached tokens', metrics.cachedTokens),
+        metricRow('Output tokens', metrics.outputTokens),
+      ),
+    ),
+  );
+  showOverlay(modal);
+}
+
+function metricRow(label: string, value: any) {
+  return el('div.metric-row',
+    el('span.metric-label', label),
+    el('span.metric-value', value != null ? String(value) : '-'),
+  );
+}
+
+// ── Input Area ──
+
+function renderInput(tab: Tab): HTMLElement {
+  const inputArea = el('div.input-area');
+  const container = el('div.input-container');
+
+  if (pendingAttachments.length > 0) {
+    container.appendChild(renderPendingAttachments());
+  }
+
+  const textarea = el('textarea.chat-input', {
+    placeholder: 'Type your message here...',
+    id: 'chat-textarea',
+    rows: '1',
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        const val = (document.getElementById('chat-textarea') as HTMLTextAreaElement)?.value || '';
+        if (val.trim() || pendingAttachments.length > 0) sendMessage(tab, val);
+      }
+    },
+    onInput: () => autoResize(),
+    onPaste: (e: ClipboardEvent) => handlePaste(e),
+  }) as HTMLTextAreaElement;
+
+  const sendBtn = el('button.send-btn', {
+    title: 'Send (Enter)',
+    onClick: () => {
+      const val = (document.getElementById('chat-textarea') as HTMLTextAreaElement)?.value || '';
+      if (val.trim() || pendingAttachments.length > 0) sendMessage(tab, val);
+    },
+  }, tab.streaming
+    ? el.fragment(el('i.ri-stop-circle-line'), "Stop")
+    : el.fragment(el('i.ri-send-plane-2-fill'), "Send"));
+
+  if (tab.streaming) {
+    sendBtn.onclick = () => {
+      if (tab.abortController) tab.abortController.abort();
+      tab.streaming = false;
+      persist();
+      render();
+    };
+  }
+
+  const inputRow = el('div.input-row', textarea);
+
+  const toolbar = el('div.input-toolbar',
+    el('button.toolbar-btn.model-btn', { title: 'Model settings', onClick: () => showModelSettings(tab) },
+      el('i.ri-robot-line'),
+      el('span.model-label', ` ${tab.config.model}`),
+    ),
+    el('button.toolbar-btn', { title: 'Attach file', onClick: () => openFilePicker() },
+      el('i.ri-attachment-2')),
+    el('button.toolbar-btn', {
+      title: recording ? 'Stop recording' : 'Record voice',
+      onClick: () => toggleRecording(),
+      ...(recording ? { class: ['toolbar-btn', 'recording'] } : {}),
+    }, el('i', { class: recording ? 'ri-stop-circle-line' : 'ri-mic-line' })),
+    el('button.toolbar-btn', { title: 'Library', onClick: () => showLibraryModal() },
+      el('i.ri-image-line')),
+    el('button.toolbar-btn', { title: 'Advanced settings', onClick: () => showAdvancedSettings(tab) },
+      el('i.ri-settings-3-line')),
+  );
+
+  const inputFooter = el('div.input-footer',
+    toolbar,
+    el('div.input-actions', sendBtn),
+  );
+
+  container.appendChild(inputRow);
+  container.appendChild(inputFooter);
+
+  inputArea.appendChild(container);
+
+  inputArea.addEventListener('dragover', (e: any) => { e.preventDefault(); inputArea.classList.add('drag-over'); });
+  inputArea.addEventListener('dragleave', () => inputArea.classList.remove('drag-over'));
+  inputArea.addEventListener('drop', (e: DragEvent) => {
+    e.preventDefault();
+    inputArea.classList.remove('drag-over');
+    if (e.dataTransfer?.files) handleFiles(e.dataTransfer.files);
+  });
+
+  return inputArea;
+}
+
+function renderPendingAttachments(): HTMLElement {
+  return el('div.pending-attachments',
+    ...pendingAttachments.map((att, i) =>
+      el('div.pending-att',
+        att.type === 'image'
+          ? el('img.pending-att-thumb', { src: att.dataUrl })
+          : el('span.pending-att-name', att.name),
+        el('button.pending-att-remove', { onClick: () => { pendingAttachments.splice(i, 1); render(); } },
+          el('i.ri-close-line')),
+      )
+    ),
+  );
+}
+
+function autoResize() {
+  const ta = document.getElementById('chat-textarea') as HTMLTextAreaElement;
+  if (!ta) return;
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+}
+
+function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of Array.from(items)) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) readFileAsAttachment(file);
+    }
+  }
+}
+
+function openFilePicker() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.multiple = true;
+  input.accept = 'image/*,audio/*,.pdf,.txt,.csv,.json';
+  input.onchange = () => {
+    if (input.files) handleFiles(input.files);
+  };
+  input.click();
+}
+
+function handleFiles(files: FileList) {
+  for (const file of Array.from(files)) {
+    readFileAsAttachment(file);
+  }
+}
+
+function readFileAsAttachment(file: File) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result as string;
+    let type: Attachment['type'] = 'file';
+    if (file.type.startsWith('image/')) type = 'image';
+    else if (file.type.startsWith('audio/')) type = 'audio';
+
+    pendingAttachments.push({ type, name: file.name, mimeType: file.type, dataUrl });
+    render();
+  };
+  reader.readAsDataURL(file);
+}
+
+function toggleRecording() {
+  if (recording && mediaRecorder) {
+    mediaRecorder.stop();
+    recording = false;
+    render();
+    return;
+  }
+
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    const chunks: Blob[] = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+    mediaRecorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const reader = new FileReader();
+      reader.onload = () => {
+        pendingAttachments.push({
+          type: 'audio',
+          name: 'voice-recording.webm',
+          mimeType: 'audio/webm',
+          dataUrl: reader.result as string,
+        });
+        render();
+      };
+      reader.readAsDataURL(blob);
+    };
+    mediaRecorder.start();
+    recording = true;
+    render();
+  }).catch(() => {
+    alert('Microphone access denied.');
+  });
+}
+
+// ── Library ──
+
+function showLibraryModal() {
+  removeOverlay();
+  const selected = new Set<number>();
+  let adding = false;
+
+  function renderLib() {
+    removeOverlay();
+    const items = LIBRARY_ITEMS.map((item, i) => {
+      const isSelected = selected.has(i);
+      return el(`div.library-item${isSelected ? '.selected' : ''}`, {
+        onClick: () => { isSelected ? selected.delete(i) : selected.add(i); renderLib(); },
+      },
+        item.previewKind === 'image'
+          ? el('img.library-thumb', { src: item.url, alt: item.name })
+          : el('div.library-file-icon', el('i', { class: item.iconClass })),
+        el('span.library-name', item.name),
+      );
+    });
+
+    const modal = el('div.modal',
+      el('div.modal-header',
+        el('h3', 'Content Library'),
+        el('button.modal-close', { onClick: removeOverlay }, el('i.ri-close-line')),
+      ),
+      el('div.modal-body',
+        items.length > 0
+          ? el('div.library-grid', ...items)
+          : el('div.tool-info', 'No example media found in the medialib folder.'),
+      ),
+      el('div.modal-footer',
+        el('button.btn.btn-primary', {
+          ...(selected.size === 0 || adding ? { disabled: 'true' } : {}),
+          onClick: async () => {
+            if (selected.size === 0 || adding) return;
+
+            adding = true;
+            renderLib();
+
+            try {
+              const attachments = await Promise.all(
+                Array.from(selected).map(idx => createAttachmentFromLibraryItem(LIBRARY_ITEMS[idx])),
+              );
+              pendingAttachments.push(...attachments);
+            } catch {
+              window.alert('Failed to load one or more media examples.');
+              adding = false;
+              renderLib();
+              return;
+            }
+
+            removeOverlay();
+            render();
+          },
+        }, adding ? 'Adding media...' : `Add ${selected.size} item(s)`),
+      ),
+    );
+    showOverlay(modal);
+  }
+  renderLib();
+}
+
+// ── Model Settings ──
+
+function showModelSettings(tab: Tab) {
+  removeOverlay();
+  const cfg = tab.config;
+  const draftCfg = {
+    model: cfg.model,
+    endpoint: cfg.endpoint,
+    apiKey: cfg.apiKey,
+  };
+  let presetsOpen = false;
+
+  function readDraftFromInputs() {
+    const modelInput = document.getElementById('cfg-model') as HTMLInputElement | null;
+    const endpointInput = document.getElementById('cfg-endpoint') as HTMLInputElement | null;
+    const apiKeyInput = document.getElementById('cfg-apikey') as HTMLInputElement | null;
+
+    if (modelInput) draftCfg.model = modelInput.value;
+    if (endpointInput) draftCfg.endpoint = endpointInput.value;
+    if (apiKeyInput) draftCfg.apiKey = apiKeyInput.value;
+  }
+
+  function renderModelSettings() {
+    removeOverlay();
+
+    const presetMenu = presetsOpen
+      ? el('div.dropdown-menu.endpoint-preset-menu',
+        ...ENDPOINT_PRESETS.map(preset =>
+          el('button.dropdown-item.endpoint-preset-item', {
+            onClick: () => {
+              draftCfg.endpoint = preset.endpoint;
+              presetsOpen = false;
+              renderModelSettings();
+            },
+          },
+            el('span.endpoint-preset-copy',
+              el('span.endpoint-preset-label', preset.label),
+              el('span.endpoint-preset-value', preset.endpoint),
+            ),
+          ),
+        ),
+      )
+      : null;
+
+    const modal = el('div.modal',
+      el('div.modal-header',
+        el('h3', 'Model Settings'),
+        el('button.modal-close', { onClick: removeOverlay }, el('i.ri-close-line')),
+      ),
+      el('div.modal-body',
+        formGroup('Model', el('input.form-input', { type: 'text', value: draftCfg.model, id: 'cfg-model' })),
+        formGroup('API Endpoint',
+          el('div.endpoint-field',
+            el('div.endpoint-field-row',
+              el('input.form-input', { type: 'text', value: draftCfg.endpoint, id: 'cfg-endpoint' }),
+              el('button.btn.endpoint-picker-btn', {
+                title: 'Choose a preset endpoint',
+                onClick: () => {
+                  readDraftFromInputs();
+                  presetsOpen = !presetsOpen;
+                  renderModelSettings();
+                },
+              }, '...'),
+            ),
+            presetMenu,
+          )),
+        formGroup('API Key', el('input.form-input', { type: 'password', value: draftCfg.apiKey, id: 'cfg-apikey', placeholder: 'sk-...' })),
+      ),
+      el('div.modal-footer',
+        el('button.btn.btn-primary', {
+          onClick: () => {
+            readDraftFromInputs();
+            cfg.model = draftCfg.model;
+            cfg.endpoint = draftCfg.endpoint;
+            cfg.apiKey = draftCfg.apiKey;
+            persist();
+            removeOverlay();
+            render();
+          },
+        }, 'Save'),
+      ),
+    );
+
+    showOverlay(modal);
+  }
+
+  renderModelSettings();
+}
+
+// ── Advanced Settings ──
+
+function showAdvancedSettings(tab: Tab) {
+  removeOverlay();
+  let activeSettingsTab = 0;
+  const draftCfg = normalizeTabConfig(JSON.parse(JSON.stringify(tab.config)));
+
+  function parseNullableFloat(value: string): number | null {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = parseFloat(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function parseNullableInt(value: string): number | null {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = parseInt(trimmed, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function tryParseJSONObject(value: string): Record<string, unknown> | null {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function readSettingsIntoDraft() {
+    if (activeSettingsTab === 0) {
+      const system = document.getElementById('cfg-system') as HTMLTextAreaElement | null;
+      const reasoning = document.getElementById('cfg-reasoning') as HTMLSelectElement | null;
+
+      if (system) draftCfg.systemPrompt = system.value;
+      if (reasoning) draftCfg.reasoningEffort = normalizeReasoningEffort(reasoning.value);
+      return;
+    }
+
+    if (activeSettingsTab === 1) {
+      const temp = document.getElementById('cfg-temp') as HTMLInputElement | null;
+      const topP = document.getElementById('cfg-topp') as HTMLInputElement | null;
+      const freq = document.getElementById('cfg-freq') as HTMLInputElement | null;
+      const pres = document.getElementById('cfg-pres') as HTMLInputElement | null;
+      const maxTokens = document.getElementById('cfg-maxtokens') as HTMLInputElement | null;
+      const stop = document.getElementById('cfg-stop') as HTMLInputElement | null;
+      const tempEnabled = document.getElementById('cfg-temp-enabled') as HTMLInputElement | null;
+      const topPEnabled = document.getElementById('cfg-topp-enabled') as HTMLInputElement | null;
+      const freqEnabled = document.getElementById('cfg-freq-enabled') as HTMLInputElement | null;
+      const presEnabled = document.getElementById('cfg-pres-enabled') as HTMLInputElement | null;
+      const maxTokensEnabled = document.getElementById('cfg-maxtokens-enabled') as HTMLInputElement | null;
+
+      const temperatureEnabled = tempEnabled?.checked ?? false;
+      const topPIsEnabled = topPEnabled?.checked ?? false;
+      const frequencyPenaltyEnabled = freqEnabled?.checked ?? false;
+      const presencePenaltyEnabled = presEnabled?.checked ?? false;
+      const maxTokensIsEnabled = maxTokensEnabled?.checked ?? false;
+
+      draftCfg.enabledParams.temperature = temperatureEnabled;
+      draftCfg.enabledParams.topP = topPIsEnabled;
+      draftCfg.enabledParams.frequencyPenalty = frequencyPenaltyEnabled;
+      draftCfg.enabledParams.presencePenalty = presencePenaltyEnabled;
+      draftCfg.enabledParams.maxTokens = maxTokensIsEnabled;
+
+      if (temp && temperatureEnabled) draftCfg.temperature = parseNullableFloat(temp.value) ?? SAMPLING_FALLBACKS.temperature;
+      if (topP && topPIsEnabled) draftCfg.topP = parseNullableFloat(topP.value) ?? SAMPLING_FALLBACKS.topP;
+      if (freq && frequencyPenaltyEnabled) draftCfg.frequencyPenalty = parseNullableFloat(freq.value) ?? SAMPLING_FALLBACKS.frequencyPenalty;
+      if (pres && presencePenaltyEnabled) draftCfg.presencePenalty = parseNullableFloat(pres.value) ?? SAMPLING_FALLBACKS.presencePenalty;
+      if (maxTokens && maxTokensIsEnabled) draftCfg.maxTokens = parseNullableInt(maxTokens.value) ?? SAMPLING_FALLBACKS.maxTokens;
+
+      const stopSequences = stop?.value
+        ? stop.value.split(',').map(s => s.trim()).filter(Boolean)
+        : [];
+      draftCfg.stopSequences = stopSequences.length > 0 ? stopSequences : null;
+      return;
+    }
+
+    if (activeSettingsTab === 2) {
+      const tools = document.getElementById('cfg-tools') as HTMLTextAreaElement | null;
+      if (tools) draftCfg.tools = tryParseJSON(tools.value) || [];
+      return;
+    }
+
+    const structuredJson = document.getElementById('cfg-structured-json') as HTMLTextAreaElement | null;
+    if (structuredJson) draftCfg.structuredJson = tryParseJSONObject(structuredJson.value);
+  }
+
+  function renderSettings() {
+    removeOverlay();
+    const cfg = draftCfg;
+
+    const tabBtns = ['Model', 'Sampling', 'Tools', 'Structured JSON'].map((name, i) =>
+      el(`button.settings-tab-btn${i === activeSettingsTab ? '.active' : ''}`, {
+        onClick: () => {
+          readSettingsIntoDraft();
+          activeSettingsTab = i;
+          renderSettings();
+        },
+      }, name)
+    );
+
+    let content: HTMLElement;
+
+    if (activeSettingsTab === 0) {
+      content = el('div.settings-panel',
+        formGroup('System Instructions',
+          el('textarea.form-input.form-textarea', { id: 'cfg-system', rows: '5' }, cfg.systemPrompt)),
+        formGroup('Reasoning Effort',
+          el('select.form-input', { id: 'cfg-reasoning' },
+            ...['disabled', 'none', 'low', 'medium', 'high'].map(v =>
+              el('option', { value: v, ...(v === cfg.reasoningEffort ? { selected: 'true' } : {}) }, v)
+            ),
+          )),
+      );
+    } else if (activeSettingsTab === 1) {
+      const ep = cfg.enabledParams || {};
+      content = el('div.settings-panel.sampling-panel',
+        toggleSliderGroup('Temperature', 'cfg-temp', cfg.temperature, SAMPLING_FALLBACKS.temperature, 0, 2, 0.1, ep.temperature === true, 'temperature', cfg,
+          'Controls how deterministic or creative the reply should feel.'),
+        toggleSliderGroup('Top P', 'cfg-topp', cfg.topP, SAMPLING_FALLBACKS.topP, 0, 1, 0.05, ep.topP === true, 'topP', cfg,
+          'Limits token selection to the most likely candidates.'),
+        toggleSliderGroup('Frequency Penalty', 'cfg-freq', cfg.frequencyPenalty, SAMPLING_FALLBACKS.frequencyPenalty, 0, 2, 0.1, ep.frequencyPenalty === true, 'frequencyPenalty', cfg,
+          'Reduces repeated words and phrases across the response.'),
+        toggleSliderGroup('Presence Penalty', 'cfg-pres', cfg.presencePenalty, SAMPLING_FALLBACKS.presencePenalty, 0, 2, 0.1, ep.presencePenalty === true, 'presencePenalty', cfg,
+          'Encourages the model to introduce fresher topics.'),
+        toggleFormGroup('Max Tokens', ep.maxTokens === true, 'maxTokens', cfg,
+          el('input.form-input', {
+            type: 'number',
+            value: cfg.maxTokens == null ? '' : String(cfg.maxTokens),
+            id: 'cfg-maxtokens',
+            min: '0',
+            placeholder: 'null',
+          }),
+          String(SAMPLING_FALLBACKS.maxTokens),
+          'Caps the maximum size of the generated answer.'),
+        describedFormGroup('Stop Sequences',
+          'Comma-separated values that immediately stop generation when matched.',
+          el('input.form-input', { type: 'text', value: cfg.stopSequences?.join(', ') ?? '', id: 'cfg-stop', placeholder: 'Observation:, </tool_output>' })),
+      );
+    } else if (activeSettingsTab === 2) {
+      content = el('div.settings-panel',
+        formGroup('Tools JSON',
+          el('textarea.form-input.form-textarea', {
+            id: 'cfg-tools',
+            rows: '10',
+            placeholder: '[{"type":"function","function":{...}}]',
+          }, JSON.stringify(cfg.tools, null, 2))),
+        el('div.tool-presets',
+          el('span', 'Presets: '),
+          el('button.btn.btn-sm', {
+            onClick: () => {
+              const ta = document.getElementById('cfg-tools') as HTMLTextAreaElement;
+              const current = tryParseJSON(ta.value) || [];
+              current.push(PREDEFINED_TOOLS.webSearch);
+              ta.value = JSON.stringify(current, null, 2);
+            },
+          }, 'Web Search'),
+          el('button.btn.btn-sm', {
+            onClick: () => {
+              const ta = document.getElementById('cfg-tools') as HTMLTextAreaElement;
+              const current = tryParseJSON(ta.value) || [];
+              current.push(PREDEFINED_TOOLS.math);
+              ta.value = JSON.stringify(current, null, 2);
+            },
+          }, 'Math'),
+        ),
+      );
+    } else {
+      content = el('div.settings-panel',
+        formGroup('Structured JSON',
+          el('textarea.form-input.form-textarea', {
+            id: 'cfg-structured-json',
+            rows: '16',
+            placeholder: STRUCTURED_JSON_PLACEHOLDER,
+          }, cfg.structuredJson ? JSON.stringify(cfg.structuredJson, null, 2) : '')),
+        el('div.tool-presets',
+          el('span', 'Presets: '),
+          el('button.btn.btn-sm', {
+            onClick: () => {
+              const ta = document.getElementById('cfg-structured-json') as HTMLTextAreaElement;
+              ta.value = JSON.stringify(PREDEFINED_STRUCTURED_JSON.answer, null, 2);
+            },
+          }, 'Answer'),
+          el('button.btn.btn-sm', {
+            onClick: () => {
+              const ta = document.getElementById('cfg-structured-json') as HTMLTextAreaElement;
+              ta.value = JSON.stringify(PREDEFINED_STRUCTURED_JSON.answerWithConfidence, null, 2);
+            },
+          }, 'Answer + Confidence'),
+          el('button.btn.btn-sm', {
+            onClick: () => {
+              const ta = document.getElementById('cfg-structured-json') as HTMLTextAreaElement;
+              ta.value = JSON.stringify(PREDEFINED_STRUCTURED_JSON.answerWithCitations, null, 2);
+            },
+          }, 'Answer + Citations'),
+        ),
+      );
+    }
+
+    const modal = el('div.modal',
+      el('div.modal-header',
+        el('h3', 'Advanced Settings'),
+        el('button.modal-close', { onClick: removeOverlay }, el('i.ri-close-line')),
+      ),
+      el('div.settings-tabs', ...tabBtns),
+      el('div.modal-body', content),
+      el('div.modal-footer',
+        el('button.btn.btn-primary', {
+          onClick: () => {
+            readSettingsIntoDraft();
+            Object.assign(tab.config, draftCfg, { enabledParams: { ...draftCfg.enabledParams } });
+            persist();
+            removeOverlay();
+            render();
+          },
+        }, 'Save'),
+      ),
+    );
+    showOverlay(modal);
+  }
+
+  renderSettings();
+}
+
+function formGroup(label: string, input: HTMLElement): HTMLElement {
+  return el('div.form-group',
+    el('label.form-label', label),
+    input,
+  );
+}
+
+function describedFormGroup(label: string, description: string, input: HTMLElement): HTMLElement {
+  return el('div.form-group.form-card',
+    el('div.control-copy',
+      el('span.control-title', label),
+      el('span.control-description', description),
+    ),
+    input,
+  );
+}
+
+function formatNullableSettingValue(value: number | null): string {
+  return value == null ? 'null' : String(value);
+}
+
+function toggleSliderGroup(label: string, id: string, value: number | null, fallbackValue: number, min: number, max: number, step: number, enabled: boolean, paramKey: string, cfg: TabConfig, description: string): HTMLElement {
+  let group!: HTMLElement;
+  let currentValue = value;
+  const display = el('span.slider-value.slider-value-badge', formatNullableSettingValue(value));
+  const slider = el('input.form-slider', {
+    type: 'range', id, value: String(value ?? fallbackValue),
+    min: String(min), max: String(max), step: String(step),
+    ...(enabled ? {} : { disabled: 'true' }),
+    onInput: (e: Event) => {
+      currentValue = parseFloat((e.target as HTMLInputElement).value);
+      display.textContent = formatNullableSettingValue(currentValue);
+    },
+  });
+
+  const toggle = el('input.param-toggle.toggle-input', {
+    id: `${id}-enabled`,
+    type: 'checkbox',
+    ...(enabled ? { checked: 'true' } : {}),
+    onChange: (e: Event) => {
+      const on = (e.target as HTMLInputElement).checked;
+      cfg.enabledParams[paramKey] = on;
+      (slider as HTMLInputElement).disabled = !on;
+      group.classList.toggle('is-disabled', !on);
+
+      if (on && currentValue == null) {
+        currentValue = parseFloat((slider as HTMLInputElement).value);
+      }
+
+      display.textContent = on
+        ? formatNullableSettingValue(currentValue)
+        : formatNullableSettingValue(currentValue);
+    },
+  });
+
+  group = el(`div.form-group.form-card${enabled ? '' : '.is-disabled'}`,
+    el('div.slider-header',
+      el('label.control-toggle',
+        toggle,
+        el('span.toggle-switch'),
+        el('span.control-copy',
+          el('span.control-title', label),
+          el('span.control-description', description),
+        ),
+      ),
+      display,
+    ),
+    slider,
+  );
+
+  return group;
+}
+
+function toggleFormGroup(label: string, enabled: boolean, paramKey: string, cfg: TabConfig, input: HTMLElement, defaultValueOnEnable: string, description: string): HTMLElement {
+  let group!: HTMLElement;
+  const control = input as HTMLInputElement;
+  const toggle = el('input.param-toggle.toggle-input', {
+    id: `${control.id}-enabled`,
+    type: 'checkbox',
+    ...(enabled ? { checked: 'true' } : {}),
+    onChange: (e: Event) => {
+      const on = (e.target as HTMLInputElement).checked;
+      cfg.enabledParams[paramKey] = on;
+      control.disabled = !on;
+      if (on && !control.value) {
+        control.value = defaultValueOnEnable;
+      }
+      group.classList.toggle('is-disabled', !on);
+    },
+  });
+  if (!enabled) control.disabled = true;
+
+  group = el(`div.form-group.form-card${enabled ? '' : '.is-disabled'}`,
+    el('div.control-header',
+      el('label.control-toggle',
+        toggle,
+        el('span.toggle-switch'),
+        el('span.control-copy',
+          el('span.control-title', label),
+          el('span.control-description', description),
+        ),
+      ),
+    ),
+    input,
+  );
+
+  return group;
+}
+
+function tryParseJSON(val: string): any[] | null {
+  try {
+    const parsed = JSON.parse(val);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Message Actions ──
+
+function editUserMessage(tab: Tab, msg: ChatMessage) {
+  removeOverlay();
+  const textarea = el('textarea.form-input.form-textarea', { id: 'edit-msg', rows: '5' }, msg.content) as HTMLTextAreaElement;
+
+  const modal = el('div.modal',
+    el('div.modal-header',
+      el('h3', 'Edit Message'),
+      el('button.modal-close', { onClick: removeOverlay }, el('i.ri-close-line')),
+    ),
+    el('div.modal-body', textarea),
+    el('div.modal-footer',
+      el('button.btn.btn-primary', {
+        onClick: () => {
+          msg.content = (document.getElementById('edit-msg') as HTMLTextAreaElement).value;
+          persist();
+          removeOverlay();
+          render();
+        },
+      }, 'Save'),
+    ),
+  );
+  showOverlay(modal);
+}
+
+function retryFromMessage(tab: Tab, msg: ChatMessage) {
+  const idx = tab.messages.indexOf(msg);
+  if (idx === -1) return;
+  clearReasoningStateForMessages(tab.messages.slice(idx + 1));
+  tab.messages = tab.messages.slice(0, idx + 1);
+  persist();
+  sendMessage(tab, undefined, true);
+}
+
+function retryAssistant(tab: Tab, msg: ChatMessage) {
+  const idx = tab.messages.indexOf(msg);
+  if (idx === -1) return;
+  clearReasoningStateForMessages(tab.messages.slice(idx));
+  tab.messages = tab.messages.slice(0, idx);
+  persist();
+  sendMessage(tab, undefined, true);
+}
+
+function editToolResponse(tab: Tab, msg: ChatMessage) {
+  if (!msg.toolCallId) return;
+  openToolResponseEditor(tab, msg.toolCallId);
+}
+
+function submitToolResponse(tab: Tab, toolCallId: string, response: string) {
+  const existingResponse = tab.messages.find(m => m.role === 'tool' && m.toolCallId === toolCallId);
+
+  if (existingResponse) {
+    existingResponse.content = response;
+    existingResponse.timestamp = Date.now();
+  } else {
+    tab.messages.push({
+      id: uid(),
+      role: 'tool',
+      content: response,
+      toolCallId,
+      timestamp: Date.now(),
+    });
+  }
+
+  closeToolResponseEditor(tab, toolCallId);
+  persist();
+  render();
+}
+
+// ── Send & Stream ──
+
+async function sendMessage(tab: Tab, content?: string, continueOnly?: boolean) {
+  if (tab.streaming) return;
+
+  if (!continueOnly && content !== undefined) {
+    const userMsg: ChatMessage = {
+      id: uid(),
+      role: 'user',
+      content: content,
+      attachments: pendingAttachments.length > 0 ? [...pendingAttachments] : undefined,
+      timestamp: Date.now(),
+    };
+    tab.messages.push(userMsg);
+    pendingAttachments = [];
+  }
+
+  const assistantMsg: ChatMessage = {
+    id: uid(),
+    role: 'assistant',
+    content: '',
+    model: tab.config.model,
+    parts: [],
+    timestamp: Date.now(),
+  };
+  tab.messages.push(assistantMsg);
+  tab.streaming = true;
+
+  persist();
+  render();
+
+  const controller = await streamChat(tab, {
+    onPart: (part) => {
+      appendAssistantTextPart(assistantMsg, part.type, part.text);
+      updateStreamingMessage(tab, assistantMsg);
+    },
+    onToolCalls: (toolCalls, newIndexes) => {
+      assistantMsg.toolCalls = toolCalls;
+      for (const index of newIndexes) {
+        appendAssistantToolCallPart(assistantMsg, index);
+      }
+      updateStreamingMessage(tab, assistantMsg);
+    },
+    onDone: (metrics) => {
+      assistantMsg.metrics = metrics;
+      tab.streaming = false;
+      tab.abortController = undefined;
+
+      if (assistantMsg.toolCalls && assistantMsg.toolCalls.length > 0) {
+        persist();
+        render();
+        return;
+      }
+
+      if (!hasAssistantRenderableOutput(assistantMsg)) {
+        tab.messages = tab.messages.filter(m => m.id !== assistantMsg.id);
+      }
+
+      persist();
+      render();
+    },
+    onError: (error) => {
+      appendAssistantTextPart(assistantMsg, 'content', `${assistantMsg.content ? '\n\n' : ''}**Error:** ${error}`);
+      updateStreamingMessage(tab, assistantMsg);
+    },
+  });
+
+  tab.abortController = controller;
+}
+
+function updateStreamingMessage(tab: Tab, msg: ChatMessage) {
+  const currentMessage = document.querySelector(`.message-assistant[data-message-id="${msg.id}"]`) as HTMLElement | null;
+  if (!currentMessage) {
+    render();
+    return;
+  }
+
+  currentMessage.replaceWith(renderAssistantMessage(tab, msg));
+  scrollChatToBottom();
+}
+
+function scrollChatToBottom() {
+  requestAnimationFrame(() => {
+    const scrollEl = document.getElementById('chat-scroll');
+    if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+  });
+}
+
+// ── Overlay System ──
+
+function showOverlay(content: HTMLElement) {
+  removeOverlay();
+  const overlay = el('div.overlay', { id: 'overlay', onClick: (e: Event) => { if (e.target === overlay) removeOverlay(); } },
+    content,
+  );
+  document.body.appendChild(overlay);
+}
+
+function removeOverlay() {
+  document.getElementById('overlay')?.remove();
+}
+
+// ── Init ──
 
 init();

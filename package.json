@@ -1,19 +1,20 @@
 {
   "name": "chat-ui",
-  "private": true,
-  "version": "0.0.0",
   "type": "module",
+  "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "build": "tsc --noEmit && vite build",
+    "check-syntax": "tsc --noEmit"
   },
   "devDependencies": {
-    "typescript": "~5.9.3",
-    "vite": "^7.2.4"
+    "@types/dompurify": "^3.2.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1"
   },
   "dependencies": {
-    "idb": "^8.0.3",
-    "marked": "^17.0.1"
+    "@cypherpotato/el": "^1.0.3",
+    "dompurify": "^3.3.2",
+    "marked": "^17.0.4"
   }
 }
