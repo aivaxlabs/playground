@@ -125,7 +125,13 @@ function buildMessages(tab: Tab): any[] {
                     parts.push({ type: 'input_audio', input_audio: { data: base64, format } });
                 } else {
                     const base64 = att.dataUrl.split(',')[1] || att.dataUrl;
-                    parts.push({ type: 'file', file: { filename: att.name, file_data: base64 } });
+                    parts.push({
+                        type: 'file',
+                        file: {
+                            filename: att.name,
+                            file_data: `data:${att.mimeType};base64,${base64}`,
+                        },
+                    });
                 }
             }
             if (msg.content) {
