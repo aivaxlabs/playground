@@ -1,4 +1,4 @@
-import type { Tab, MessageMetrics, ToolCall } from './types';
+import type { DebugInfo, Tab, MessageMetrics, ToolCall } from './types';
 
 export interface StreamTextPart {
     type: 'content' | 'reasoning';
@@ -10,6 +10,169 @@ export interface StreamCallbacks {
     onToolCalls: (toolCalls: ToolCall[], newIndexes: number[]) => void;
     onDone: (metrics: MessageMetrics) => void;
     onError: (error: string) => void;
+    onDebug: (debugInfo: DebugInfo) => void;
+}
+
+function sanitizeHeaderValue(name: string, value: string): string {
+    const lowerName = name.toLowerCase();
+    if (lowerName === 'authorization') {
+        return value.startsWith('Bearer ') ? 'Bearer [hidden]' : '[hidden]';
+    }
+
+    if (lowerName === 'x-api-key' || lowerName === 'api-key') {
+        return '[hidden]';
+    }
+
+    return value;
+}
+
+function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
+    return Object.fromEntries(
+        Object.entries(headers).map(([name, value]) => [name, sanitizeHeaderValue(name, value)]),
+    );
+}
+
+function readResponseHeaders(response: Response): Record<string, string> {
+    const entries: Array<[string, string]> = [];
+    response.headers.forEach((value, key) => {
+        entries.push([key, sanitizeHeaderValue(key, value)]);
+    });
+    return Object.fromEntries(entries);
+}
+
+function truncateDataUrl(dataUrl: string, maxLength: number): string {
+    const commaIndex = dataUrl.indexOf(',');
+    if (commaIndex === -1) {
+        return dataUrl.length > maxLength
+            ? `${dataUrl.slice(0, maxLength)}...[truncated ${dataUrl.length - maxLength} chars]`
+            : dataUrl;
+    }
+
+    const prefix = dataUrl.slice(0, commaIndex + 1);
+    const payload = dataUrl.slice(commaIndex + 1);
+    if (payload.length <= maxLength) {
+        return dataUrl;
+    }
+
+    return `${prefix}${payload.slice(0, maxLength)}...[truncated ${payload.length - maxLength} chars]`;
+}
+
+function sanitizeValueForDebug(value: unknown): unknown {
+    if (Array.isArray(value)) {
+        return value.map(item => sanitizeValueForDebug(item));
+    }
+
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+
+    return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, entryValue]) => {
+            if (key === 'file_data' && typeof entryValue === 'string') {
+                return [key, truncateDataUrl(entryValue, 160)];
+            }
+
+            if (key === 'data' && typeof entryValue === 'string') {
+                return [
+                    key,
+                    entryValue.length > 160
+                        ? `${entryValue.slice(0, 160)}...[truncated ${entryValue.length - 160} chars]`
+                        : entryValue,
+                ];
+            }
+
+            if (key === 'url' && typeof entryValue === 'string' && entryValue.startsWith('data:')) {
+                return [key, truncateDataUrl(entryValue, 160)];
+            }
+
+            return [key, sanitizeValueForDebug(entryValue)];
+        }),
+    );
+}
+
+function createDebugInfo(url: string, headers: Record<string, string>, body: unknown): DebugInfo {
+    return {
+        requestUrl: url,
+        requestMethod: 'POST',
+        requestHeaders: sanitizeHeaders(headers),
+        requestBody: JSON.stringify(sanitizeValueForDebug(body), null, 2),
+        responseHeaders: {},
+        modelResponse: '',
+        sseResponse: '',
+        updatedAt: Date.now(),
+    };
+}
+
+function aggregateModelResponse(events: any[]): string {
+    const toolCalls: ToolCall[] = [];
+    const reasoningParts: StreamTextPart[] = [];
+    const contentParts: StreamTextPart[] = [];
+    let usage: Record<string, unknown> | undefined;
+    let finishReason: string | null = null;
+    let id: string | undefined;
+    let model: string | undefined;
+    let created: number | undefined;
+    let systemFingerprint: string | undefined;
+
+    for (const event of events) {
+        if (!event || typeof event !== 'object') {
+            continue;
+        }
+
+        if (typeof event.id === 'string') id = event.id;
+        if (typeof event.model === 'string') model = event.model;
+        if (typeof event.created === 'number') created = event.created;
+        if (typeof event.system_fingerprint === 'string') systemFingerprint = event.system_fingerprint;
+        if (event.usage && typeof event.usage === 'object') usage = event.usage as Record<string, unknown>;
+
+        const choice = event.choices?.[0];
+        if (!choice) {
+            continue;
+        }
+
+        if (typeof choice.finish_reason === 'string') {
+            finishReason = choice.finish_reason;
+        }
+
+        const delta = choice.delta;
+        if (!delta || typeof delta !== 'object') {
+            continue;
+        }
+
+        pushStructuredTextParts(delta.content, 'content', contentParts);
+        pushStructuredTextParts(delta.reasoning, 'reasoning', reasoningParts);
+        pushStructuredTextParts(delta.reasoning_content, 'reasoning', reasoningParts);
+        pushStructuredTextParts(delta.reasoning_details, 'reasoning', reasoningParts);
+
+        if (Array.isArray(delta.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+                const index = tc.index ?? toolCalls.length;
+                if (!toolCalls[index]) {
+                    toolCalls[index] = {
+                        id: tc.id || '',
+                        type: 'function',
+                        function: { name: '', arguments: '' },
+                    };
+                }
+                if (tc.id) toolCalls[index].id = tc.id;
+                if (tc.function?.name) toolCalls[index].function.name += tc.function.name;
+                if (tc.function?.arguments) toolCalls[index].function.arguments += tc.function.arguments;
+            }
+        }
+    }
+
+    return JSON.stringify({
+        id,
+        object: 'chat.completion.aggregated',
+        created,
+        model,
+        system_fingerprint: systemFingerprint,
+        finish_reason: finishReason,
+        reasoning: reasoningParts.map(part => part.text).join(''),
+        content: contentParts.map(part => part.text).join(''),
+        tool_calls: toolCalls.filter(Boolean),
+        usage,
+    }, null, 2);
 }
 
 function getStructuredResponseFormat(value: unknown): Record<string, unknown> | null {
@@ -177,6 +340,10 @@ export async function streamChat(tab: Tab, callbacks: StreamCallbacks): Promise<
     };
     if (cfg.apiKey) headers['Authorization'] = `Bearer ${cfg.apiKey}`;
 
+    const debugInfo = createDebugInfo(url, headers, body);
+    const sseEvents: any[] = [];
+    callbacks.onDebug({ ...debugInfo });
+
     const startTime = performance.now();
     let firstTokenTime = 0;
     let outputTokens = 0;
@@ -192,8 +359,18 @@ export async function streamChat(tab: Tab, callbacks: StreamCallbacks): Promise<
             signal: controller.signal,
         });
 
+        debugInfo.responseStatus = response.status;
+        debugInfo.responseStatusText = response.statusText;
+        debugInfo.responseHeaders = readResponseHeaders(response);
+        debugInfo.updatedAt = Date.now();
+        callbacks.onDebug({ ...debugInfo });
+
         if (!response.ok) {
             const errText = await response.text();
+            debugInfo.error = `HTTP ${response.status}: ${errText}`;
+            debugInfo.modelResponse = errText;
+            debugInfo.updatedAt = Date.now();
+            callbacks.onDebug({ ...debugInfo });
             callbacks.onError(`HTTP ${response.status}: ${errText}`);
             callbacks.onDone({ totalTime: Math.round(performance.now() - startTime) });
             return controller;
@@ -219,14 +396,33 @@ export async function streamChat(tab: Tab, callbacks: StreamCallbacks): Promise<
 
             for (const line of lines) {
                 const trimmed = line.trim();
-                if (!trimmed || !trimmed.startsWith('data: ')) continue;
+                if (!trimmed) continue;
+
+                debugInfo.sseResponse += `${trimmed}\n`;
+                debugInfo.updatedAt = Date.now();
+
+                if (!trimmed.startsWith('data: ')) {
+                    callbacks.onDebug({ ...debugInfo });
+                    continue;
+                }
+
                 const data = trimmed.slice(6);
-                if (data === '[DONE]') continue;
+                if (data === '[DONE]') {
+                    callbacks.onDebug({ ...debugInfo });
+                    continue;
+                }
 
                 try {
                     const parsed = JSON.parse(data);
+                    sseEvents.push(parsed);
+                    debugInfo.modelResponse = aggregateModelResponse(sseEvents);
+                    debugInfo.updatedAt = Date.now();
+                    callbacks.onDebug({ ...debugInfo });
 
                     if (parsed.error) {
+                        debugInfo.error = `${parsed.error.code || 'error'}: ${parsed.error.message || 'Unknown SSE error'}`;
+                        debugInfo.updatedAt = Date.now();
+                        callbacks.onDebug({ ...debugInfo });
                         callbacks.onError(`${parsed.error.code || 'error'}: ${parsed.error.message || 'Unknown SSE error'}`);
                         continue;
                     }
@@ -302,6 +498,9 @@ export async function streamChat(tab: Tab, callbacks: StreamCallbacks): Promise<
         }
     } catch (err: any) {
         if (err.name !== 'AbortError') {
+            debugInfo.error = err.message || 'Unknown error';
+            debugInfo.updatedAt = Date.now();
+            callbacks.onDebug({ ...debugInfo });
             callbacks.onError(err.message || 'Unknown error');
         }
     }
@@ -318,6 +517,9 @@ export async function streamChat(tab: Tab, callbacks: StreamCallbacks): Promise<
         cachedTokens,
         outputTokens,
     });
+
+    debugInfo.updatedAt = Date.now();
+    callbacks.onDebug({ ...debugInfo });
 
     return controller;
 }

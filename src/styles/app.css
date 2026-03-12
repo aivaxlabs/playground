@@ -901,6 +901,12 @@ select {
   max-width: 380px;
 }
 
+.modal-debug {
+  max-width: min(1080px, calc(100vw - 32px));
+  width: 100%;
+  max-height: min(88vh, 920px);
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -936,6 +942,12 @@ select {
   flex: 1;
 }
 
+.debug-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .modal-footer {
   padding: 12px 16px;
   border-top: 1px solid var(--border);
@@ -968,6 +980,24 @@ select {
 
 .dropdown-item:hover {
   background: var(--bg-secondary);
+}
+
+.debug-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.debug-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.debug-section-header h4 {
+  font-size: 13px;
+  font-weight: 600;
 }
 
 /* ── Buttons ── */
@@ -1370,6 +1400,11 @@ select {
   white-space: pre-wrap;
   word-break: break-all;
   margin-top: 12px;
+}
+
+.debug-code-block {
+  max-height: 260px;
+  margin-top: 0;
 }
 
 /* ── Metrics ── */

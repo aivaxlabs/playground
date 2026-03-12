@@ -1,6 +1,6 @@
 import el from "@cypherpotato/el";
 import { createTab, normalizeReasoningEffort, normalizeTabConfig, uid } from './types';
-import type { Tab, ChatMessage, Attachment, TabConfig, MessageMetrics, AssistantMessagePart, ToolCall } from './types';
+import type { Tab, ChatMessage, Attachment, TabConfig, MessageMetrics, AssistantMessagePart, ToolCall, DebugInfo } from './types';
 import { saveState, loadState } from './storage';
 import { streamChat } from './api';
 import { renderMarkdown } from './markdown';
@@ -661,6 +661,8 @@ function showOptionsMenu() {
       el('i.ri-download-line'), ' Export chat (JSON)'),
     el('button.dropdown-item', { onClick: () => { removeOverlay(); showCurlModal(tab); } },
       el('i.ri-code-line'), ' View code (cURL)'),
+    el('button.dropdown-item', { onClick: () => { removeOverlay(); showDebugInfoModal(tab); } },
+      el('i.ri-bug-line'), ' View debug info'),
     el('button.dropdown-item', { onClick: () => { removeOverlay(); void shareParameters(tab); } },
       el('i.ri-share-forward-line'), ' Share parameters'),
     el('button.dropdown-item', { onClick: () => { removeOverlay(); closeAllTabs(); } },
@@ -700,6 +702,70 @@ function downloadString(content: string, filename: string, type: string) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function formatDebugHeaders(headers: Record<string, string>): string {
+  return Object.keys(headers).length > 0 ? JSON.stringify(headers, null, 2) : '{}';
+}
+
+function buildDebugResponseHeadersText(debugInfo: DebugInfo): string {
+  const statusLine = debugInfo.responseStatus
+    ? `HTTP ${debugInfo.responseStatus}${debugInfo.responseStatusText ? ` ${debugInfo.responseStatusText}` : ''}`
+    : 'No response metadata captured yet.';
+
+  return `${statusLine}\n\n${formatDebugHeaders(debugInfo.responseHeaders)}`;
+}
+
+function buildDebugRequestText(debugInfo: DebugInfo): string {
+  return [
+    `${debugInfo.requestMethod} ${debugInfo.requestUrl}`,
+    '',
+    debugInfo.requestBody,
+  ].join('\n');
+}
+
+function buildDebugResponseText(debugInfo: DebugInfo): string {
+  return debugInfo.modelResponse || debugInfo.error || 'No response captured yet.';
+}
+
+function buildDebugSseText(debugInfo: DebugInfo): string {
+  return debugInfo.sseResponse.trim() || 'No SSE events captured yet.';
+}
+
+function renderDebugSection(title: string, content: string): HTMLElement {
+  return el('section.debug-section',
+    el('div.debug-section-header',
+      el('h4', title),
+      el('button.btn.btn-sm', { onClick: () => { void navigator.clipboard.writeText(content); } },
+        el('i.ri-clipboard-line'), ' Copy'),
+    ),
+    el('pre.code-block.debug-code-block', content),
+  );
+}
+
+function showDebugInfoModal(tab: Tab) {
+  removeOverlay();
+  const debugInfo = tab.debugInfo;
+
+  const modal = el('div.modal.modal-debug',
+    el('div.modal-header',
+      el('h3', 'Debug Info'),
+      el('button.modal-close', { onClick: removeOverlay }, el('i.ri-close-line')),
+    ),
+    el('div.modal-body.debug-modal-body',
+      debugInfo
+        ? el.fragment(
+          renderDebugSection('Request headers', formatDebugHeaders(debugInfo.requestHeaders)),
+          renderDebugSection('Response headers', buildDebugResponseHeadersText(debugInfo)),
+          renderDebugSection('Raw request', buildDebugRequestText(debugInfo)),
+          renderDebugSection('Model response', buildDebugResponseText(debugInfo)),
+          renderDebugSection('SSE received', buildDebugSseText(debugInfo)),
+        )
+        : el('div.tool-info', 'No debug data captured yet. Send a message to populate it.'),
+    ),
+  );
+
+  showOverlay(modal);
 }
 
 function showCurlModal(tab: Tab) {
@@ -1835,6 +1901,8 @@ function submitToolResponse(tab: Tab, toolCallId: string, response: string) {
 async function sendMessage(tab: Tab, content?: string, continueOnly?: boolean) {
   if (tab.streaming) return;
 
+  tab.debugInfo = undefined;
+
   if (!continueOnly && content !== undefined) {
     const userMsg: ChatMessage = {
       id: uid(),
@@ -1894,6 +1962,9 @@ async function sendMessage(tab: Tab, content?: string, continueOnly?: boolean) {
     onError: (error) => {
       appendAssistantTextPart(assistantMsg, 'content', `${assistantMsg.content ? '\n\n' : ''}**Error:** ${error}`);
       updateStreamingMessage(tab, assistantMsg);
+    },
+    onDebug: (debugInfo) => {
+      tab.debugInfo = debugInfo;
     },
   });
 

@@ -20,6 +20,20 @@ export interface MessageMetrics {
     outputTokens?: number;
 }
 
+export interface DebugInfo {
+    requestUrl: string;
+    requestMethod: string;
+    requestHeaders: Record<string, string>;
+    requestBody: string;
+    responseStatus?: number;
+    responseStatusText?: string;
+    responseHeaders: Record<string, string>;
+    modelResponse: string;
+    sseResponse: string;
+    error?: string;
+    updatedAt: number;
+}
+
 export type ReasoningEffort = 'disabled' | 'none' | 'low' | 'medium' | 'high';
 
 export type AssistantMessagePart =
@@ -63,6 +77,7 @@ export interface Tab {
     config: TabConfig;
     streaming: boolean;
     abortController?: AbortController;
+    debugInfo?: DebugInfo;
 }
 
 const REASONING_EFFORTS: ReasoningEffort[] = ['disabled', 'none', 'low', 'medium', 'high'];

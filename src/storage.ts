@@ -11,7 +11,7 @@ interface StoredState {
 
 export function saveState(tabs: Tab[], activeTabId: string | null, theme: 'light' | 'dark') {
     const state: StoredState = {
-        tabs: tabs.map(t => ({ ...t, streaming: false, abortController: undefined })),
+        tabs: tabs.map(t => ({ ...t, streaming: false, abortController: undefined, debugInfo: undefined })),
         activeTabId,
         theme,
     };
@@ -30,6 +30,7 @@ export function loadState(): StoredState | null {
         for (const tab of state.tabs) {
             tab.streaming = false;
             tab.abortController = undefined;
+            tab.debugInfo = undefined;
             tab.config = normalizeTabConfig(tab.config);
         }
         return state;
