@@ -920,6 +920,12 @@ select {
   font-weight: 600;
 }
 
+.debug-modal-header-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .modal-close {
   display: flex;
   align-items: center;

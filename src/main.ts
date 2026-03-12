@@ -732,6 +732,25 @@ function buildDebugSseText(debugInfo: DebugInfo): string {
   return debugInfo.sseResponse.trim() || 'No SSE events captured yet.';
 }
 
+function buildDebugInfoText(debugInfo: DebugInfo): string {
+  return [
+    'Request headers',
+    formatDebugHeaders(debugInfo.requestHeaders),
+    '',
+    'Response headers',
+    buildDebugResponseHeadersText(debugInfo),
+    '',
+    'Raw request',
+    buildDebugRequestText(debugInfo),
+    '',
+    'Model response',
+    buildDebugResponseText(debugInfo),
+    '',
+    'SSE received',
+    buildDebugSseText(debugInfo),
+  ].join('\n');
+}
+
 function renderDebugSection(title: string, content: string): HTMLElement {
   return el('section.debug-section',
     el('div.debug-section-header',
@@ -749,7 +768,13 @@ function showDebugInfoModal(tab: Tab) {
 
   const modal = el('div.modal.modal-debug',
     el('div.modal-header',
-      el('h3', 'Debug Info'),
+      el('div.debug-modal-header-copy',
+        el('h3', 'Debug Info'),
+        debugInfo
+          ? el('button.btn.btn-sm', { onClick: () => { void navigator.clipboard.writeText(buildDebugInfoText(debugInfo)); } },
+            el('i.ri-clipboard-line'), ' Copy all')
+          : null,
+      ),
       el('button.modal-close', { onClick: removeOverlay }, el('i.ri-close-line')),
     ),
     el('div.modal-body.debug-modal-body',
