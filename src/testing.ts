@@ -93,7 +93,7 @@ const TEST_MEDIA: Record<'image' | 'audio' | 'pdf' | 'video', LoadedAttachment> 
         url: videoTestUrl,
         name: 'vid1.mp4',
         mimeType: 'video/mp4',
-        type: 'file',
+        type: 'video',
     },
 };
 

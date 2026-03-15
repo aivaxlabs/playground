@@ -286,6 +286,8 @@ function buildMessages(tab: Tab): any[] {
                     const format = formatMatch ? formatMatch[1] : 'wav';
                     const base64 = att.dataUrl.split(',')[1] || att.dataUrl;
                     parts.push({ type: 'input_audio', input_audio: { data: base64, format } });
+                } else if (att.type === 'video') {
+                    parts.push({ type: 'video_url', video_url: { url: att.dataUrl } });
                 } else {
                     const base64 = att.dataUrl.split(',')[1] || att.dataUrl;
                     parts.push({

@@ -205,6 +205,7 @@ function getMimeTypeFromName(name: string): string {
 function getAttachmentTypeFromMime(mimeType: string): Attachment['type'] {
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('audio/')) return 'audio';
+  if (mimeType.startsWith('video/')) return 'video';
   return 'file';
 }
 
@@ -1376,6 +1377,7 @@ function readFileAsAttachment(file: File) {
     let type: Attachment['type'] = 'file';
     if (file.type.startsWith('image/')) type = 'image';
     else if (file.type.startsWith('audio/')) type = 'audio';
+    else if (file.type.startsWith('video/')) type = 'video';
 
     pendingAttachments.push({ type, name: file.name, mimeType: file.type, dataUrl });
     render();

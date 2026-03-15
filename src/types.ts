@@ -1,5 +1,5 @@
 export interface Attachment {
-    type: 'image' | 'audio' | 'file';
+    type: 'image' | 'audio' | 'video' | 'file';
     name: string;
     mimeType: string;
     dataUrl: string;
