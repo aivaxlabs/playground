@@ -962,6 +962,256 @@ select {
   gap: 8px;
 }
 
+.test-disclaimer {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.test-config-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.test-config-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.test-checkbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.test-checkbox-label,
+.test-fixed-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+
+.test-checkbox-label {
+  cursor: pointer;
+}
+
+.test-checkbox-copy,
+.test-fixed-copy,
+.test-item-main,
+.test-progress-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.test-checkbox-title,
+.test-fixed-title,
+.test-progress-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.test-checkbox-description,
+.test-fixed-description,
+.test-progress-detail,
+.test-item-description {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.test-fixed-row {
+  justify-content: space-between;
+}
+
+.test-fixed-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.test-progress {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+}
+
+.test-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.test-row-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.test-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.test-item-icon {
+  width: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 15px;
+  padding-top: 1px;
+  flex: 0 0 20px;
+}
+
+.test-item-icon.passed {
+  color: #22c55e;
+}
+
+.test-item-icon.failed {
+  color: #ef4444;
+}
+
+.test-item-icon.error {
+  color: #f59e0b;
+}
+
+.test-item-icon.skipped,
+.test-item-icon.queued {
+  color: var(--text-muted);
+}
+
+.test-item-icon.running {
+  color: var(--accent);
+}
+
+.test-item-icon.running i {
+  display: inline-block;
+  transform-origin: center;
+  animation: test-spin 1s linear infinite;
+}
+
+.test-item-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.test-item-main {
+  flex: 1;
+}
+
+.test-item-detail {
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.test-metrics {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.test-metrics-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.test-metric-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.test-metric-group + .test-metric-group {
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.test-metric-group-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.test-metric-subrow {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+  padding: 0;
+}
+
+.test-metric-subrow-label {
+  color: var(--text-muted);
+}
+
+.test-metric-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.test-metric-unit {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.test-metric-boolean {
+  font-weight: 500;
+}
+
+.test-metric-boolean.is-positive {
+  color: #22c55e;
+}
+
+.test-error-detail {
+  padding-left: 42px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+@keyframes test-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ── Dropdown Menu ── */
 
 .dropdown-menu {

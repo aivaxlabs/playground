@@ -6,14 +6,12 @@ const STORAGE_KEY = 'llm-playground';
 interface StoredState {
     tabs: Tab[];
     activeTabId: string | null;
-    theme: 'light' | 'dark';
 }
 
-export function saveState(tabs: Tab[], activeTabId: string | null, theme: 'light' | 'dark') {
+export function saveState(tabs: Tab[], activeTabId: string | null) {
     const state: StoredState = {
         tabs: tabs.map(t => ({ ...t, streaming: false, abortController: undefined, debugInfo: undefined })),
         activeTabId,
-        theme,
     };
     try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));

@@ -4,6 +4,7 @@ import type { Tab, ChatMessage, Attachment, TabConfig, MessageMetrics, Assistant
 import { saveState, loadState } from './storage';
 import { streamChat } from './api';
 import { renderMarkdown } from './markdown';
+import { showTestingModal } from './testing';
 import './styles/app.css';
 
 const SUGGESTIONS = [
@@ -351,6 +352,66 @@ function appendAssistantTextPart(msg: ChatMessage, type: 'content' | 'reasoning'
   }
 }
 
+function createThinkTagParser(emit: (type: 'content' | 'reasoning', text: string) => void) {
+  const OPEN_TAGS = ['<think>', '<thinking>'];
+  const CLOSE_TAGS = ['</think>', '</thinking>'];
+  let buffer = '';
+  let inThink = false;
+
+  function findTag(tags: string[]): { index: number; tagLength: number; partial: boolean } | null {
+    let bestFull: { index: number; tagLength: number } | null = null;
+    let bestPartial: { index: number; tagLength: number } | null = null;
+
+    for (const tag of tags) {
+      const idx = buffer.indexOf(tag);
+      if (idx !== -1) {
+        if (!bestFull || idx < bestFull.index) bestFull = { index: idx, tagLength: tag.length };
+        continue;
+      }
+      for (let len = Math.min(tag.length - 1, buffer.length); len >= 1; len--) {
+        if (buffer.endsWith(tag.slice(0, len))) {
+          const startIdx = buffer.length - len;
+          if (!bestPartial || startIdx < bestPartial.index) bestPartial = { index: startIdx, tagLength: tag.length };
+          break;
+        }
+      }
+    }
+
+    if (bestFull) return { ...bestFull, partial: false };
+    if (bestPartial) return { ...bestPartial, partial: true };
+    return null;
+  }
+
+  function flush() {
+    while (true) {
+      const result = findTag(inThink ? CLOSE_TAGS : OPEN_TAGS);
+
+      if (!result) {
+        emit(inThink ? 'reasoning' : 'content', buffer);
+        buffer = '';
+        break;
+      }
+
+      if (result.partial) {
+        const safe = buffer.slice(0, result.index);
+        if (safe) emit(inThink ? 'reasoning' : 'content', safe);
+        buffer = buffer.slice(result.index);
+        break;
+      }
+
+      const before = buffer.slice(0, result.index);
+      if (before) emit(inThink ? 'reasoning' : 'content', before);
+      buffer = buffer.slice(result.index + result.tagLength);
+      inThink = !inThink;
+    }
+  }
+
+  return {
+    feed(text: string) { buffer += text; flush(); },
+    end() { if (buffer) { emit(inThink ? 'reasoning' : 'content', buffer); buffer = ''; } },
+  };
+}
+
 function appendAssistantToolCallPart(msg: ChatMessage, index: number) {
   const parts = ensureAssistantParts(msg);
   collapseLatestReasoningPart(msg);
@@ -411,7 +472,7 @@ function clearToolResponseEditorsForTab(tabId: string) {
 }
 
 function persist() {
-  saveState(tabs, activeTabId, theme);
+  saveState(tabs, activeTabId);
 }
 
 function createTabWithInitialConfig(initialConfig?: Partial<Pick<TabConfig, 'model' | 'endpoint' | 'apiKey'>>): Tab {
@@ -430,8 +491,12 @@ function init() {
   if (saved) {
     tabs = saved.tabs;
     activeTabId = saved.activeTabId;
-    theme = saved.theme || theme;
   }
+
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+    theme = e.matches ? 'dark' : 'light';
+    applyTheme();
+  });
 
   parseUrlParams();
 
@@ -1227,6 +1292,8 @@ function renderInput(tab: Tab): HTMLElement {
     }, el('i', { class: recording ? 'ri-stop-circle-line' : 'ri-mic-line' })),
     el('button.toolbar-btn', { title: 'Library', onClick: () => showLibraryModal() },
       el('i.ri-image-line')),
+    el('button.toolbar-btn', { title: 'Run tests', onClick: () => showTestingModal(tab.config) },
+      el('i.ri-flask-line')),
     el('button.toolbar-btn', { title: 'Advanced settings', onClick: () => showAdvancedSettings(tab) },
       el('i.ri-settings-3-line')),
   );
@@ -1954,9 +2021,17 @@ async function sendMessage(tab: Tab, content?: string, continueOnly?: boolean) {
   persist();
   render();
 
+  const thinkParser = createThinkTagParser((type, text) => {
+    appendAssistantTextPart(assistantMsg, type, text);
+  });
+
   const controller = await streamChat(tab, {
     onPart: (part) => {
-      appendAssistantTextPart(assistantMsg, part.type, part.text);
+      if (part.type === 'content') {
+        thinkParser.feed(part.text);
+      } else {
+        appendAssistantTextPart(assistantMsg, part.type, part.text);
+      }
       updateStreamingMessage(tab, assistantMsg);
     },
     onToolCalls: (toolCalls, newIndexes) => {
@@ -1967,6 +2042,7 @@ async function sendMessage(tab: Tab, content?: string, continueOnly?: boolean) {
       updateStreamingMessage(tab, assistantMsg);
     },
     onDone: (metrics) => {
+      thinkParser.end();
       assistantMsg.metrics = metrics;
       tab.streaming = false;
       tab.abortController = undefined;
