@@ -120,7 +120,7 @@ const MIME_TYPES_BY_EXTENSION: Record<string, string> = {
   gif: 'image/gif',
   webp: 'image/webp',
   svg: 'image/svg+xml',
-  mp3: 'audio/mpeg',
+  mp3: 'audio/mp3',
   wav: 'audio/wav',
   ogg: 'audio/ogg',
   m4a: 'audio/mp4',

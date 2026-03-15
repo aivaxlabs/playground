@@ -80,7 +80,7 @@ const TEST_MEDIA: Record<'image' | 'audio' | 'pdf' | 'video', LoadedAttachment> 
     audio: {
         url: audioTestUrl,
         name: 'audio1.mp3',
-        mimeType: 'audio/mpeg',
+        mimeType: 'audio/mp3',
         type: 'audio',
     },
     pdf: {
