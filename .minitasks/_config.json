@@ -1,0 +1,10 @@
+{
+  "defaultCategory": "Backlog",
+  "categoryOrder": [
+    "Backlog",
+    "In Progress",
+    "Review",
+    "Done"
+  ],
+  "categoryColors": {}
+}

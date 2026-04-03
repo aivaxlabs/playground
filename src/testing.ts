@@ -45,6 +45,7 @@ type TestSuiteSummary = {
     connectionLatency: MetricAggregate | null;
     timeToFirstToken: MetricAggregate | null;
     totalTime: MetricAggregate | null;
+    tokensPerSecond: MetricAggregate | null;
     inputTokens: number;
     outputTokens: number;
     reasoningDetected: boolean;
@@ -100,22 +101,13 @@ const TEST_MEDIA: Record<'image' | 'audio' | 'pdf' | 'video', LoadedAttachment> 
 const attachmentCache = new Map<string, Promise<Attachment>>();
 
 const STRUCTURED_RESPONSE_FORMAT = {
-    response_format: {
-        type: 'json_schema',
-        json_schema: {
-            name: 'test_person',
-            strict: true,
-            schema: {
-                type: 'object',
-                properties: {
-                    name: { type: 'string' },
-                    age: { type: 'number' },
-                },
-                required: ['name', 'age'],
-                additionalProperties: false,
-            },
-        },
+    type: 'object',
+    properties: {
+        name: { type: 'string' },
+        age: { type: 'number' },
     },
+    required: ['name', 'age'],
+    additionalProperties: false,
 } satisfies Record<string, unknown>;
 
 const WEATHER_TOOL = {
@@ -153,6 +145,64 @@ const TIME_TOOL = {
         },
     },
 };
+
+const SEARCH_PRODUCTS_TOOL = {
+    type: 'function',
+    function: {
+        name: 'search_products',
+        description: 'Search for products in a catalog.',
+        parameters: {
+            type: 'object',
+            properties: {
+                query: { type: 'string', description: 'Search query.' },
+                filters: {
+                    type: 'object',
+                    description: 'Search filters.',
+                    properties: {
+                        category: { type: 'string', description: 'Product category.' },
+                        price_range: {
+                            type: 'object',
+                            properties: {
+                                min: { type: 'number' },
+                                max: { type: 'number' },
+                            },
+                            required: ['min', 'max'],
+                        },
+                        in_stock: { type: 'boolean', description: 'Only show in-stock items.' },
+                    },
+                    required: ['price_range', 'in_stock'],
+                },
+            },
+            required: ['query', 'filters'],
+        },
+    },
+};
+
+const GET_EXCHANGE_RATE_TOOL = {
+    type: 'function',
+    function: {
+        name: 'get_exchange_rate',
+        description: 'Get the currency exchange rate between two currencies.',
+        parameters: {
+            type: 'object',
+            properties: {
+                from_currency: { type: 'string', description: 'Source currency code.' },
+                to_currency: { type: 'string', description: 'Target currency code.' },
+                options: {
+                    type: 'object',
+                    description: 'Formatting options.',
+                    properties: {
+                        precision: { type: 'number', description: 'Decimal places in result.' },
+                    },
+                    required: ['precision'],
+                },
+            },
+            required: ['from_currency', 'to_currency', 'options'],
+        },
+    },
+};
+
+let toolCallingVariant: 'simple' | 'parallel' | 'advanced' = 'simple';
 
 function showOverlay(content: HTMLElement, closeOnBackdrop = true) {
     removeOverlay();
@@ -500,6 +550,93 @@ async function runParallelFunctionCallingTest(config: TabConfig, definition: Tes
     };
 }
 
+function validateAdvancedRun(execution: TestExecutionData): string | null {
+    const searchCall = execution.toolCalls.find(tc => tc.function.name === 'search_products');
+    const rateCall = execution.toolCalls.find(tc => tc.function.name === 'get_exchange_rate');
+
+    if (!searchCall || !rateCall) {
+        return `Expected 2 parallel calls. Got: ${execution.toolCalls.map(tc => tc.function.name).join(', ') || 'none'}.`;
+    }
+
+    const searchArgs = parseToolArguments(searchCall.function.arguments);
+    if (!searchArgs || typeof searchArgs.query !== 'string' || !searchArgs.query.trim()) {
+        return 'search_products missing required "query" string.';
+    }
+    if (!isRecord(searchArgs.filters)) {
+        return 'search_products missing "filters" object.';
+    }
+    const filters = searchArgs.filters as Record<string, unknown>;
+    if (!isRecord(filters.price_range)) {
+        return 'search_products.filters missing "price_range" object.';
+    }
+    const pr = filters.price_range as Record<string, unknown>;
+    if (typeof pr.min !== 'number' || typeof pr.max !== 'number') {
+        return 'search_products.filters.price_range missing numeric "min" or "max".';
+    }
+    if (typeof filters.in_stock !== 'boolean') {
+        return 'search_products.filters missing boolean "in_stock".';
+    }
+
+    const rateArgs = parseToolArguments(rateCall.function.arguments);
+    if (!rateArgs || typeof rateArgs.from_currency !== 'string' || typeof rateArgs.to_currency !== 'string') {
+        return 'get_exchange_rate missing "from_currency" or "to_currency".';
+    }
+    if (!isRecord(rateArgs.options)) {
+        return 'get_exchange_rate missing "options" object.';
+    }
+    const opts = rateArgs.options as Record<string, unknown>;
+    if (typeof opts.precision !== 'number') {
+        return 'get_exchange_rate.options missing numeric "precision".';
+    }
+
+    return null;
+}
+
+async function runAdvancedFunctionCallingTest(config: TabConfig, definition: TestDefinition): Promise<TestRunResult> {
+    const prompt = 'Search for electronics under $500 that are in stock, and also get the EUR to USD exchange rate with 2 decimal precision. Do both at the same time.';
+    const tools = [SEARCH_PRODUCTS_TOOL, GET_EXCHANGE_RATE_TOOL];
+
+    let passed = 0;
+    let lastExecution: TestExecutionData | null = null;
+    const failDetails: string[] = [];
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        const execution = await runConversation(config, [createUserMessage(prompt)], { tools });
+        lastExecution = execution;
+
+        if (execution.error) {
+            failDetails.push(`Run ${attempt}: API error — ${execution.error}`);
+            continue;
+        }
+
+        const validationError = validateAdvancedRun(execution);
+        if (validationError) {
+            failDetails.push(`Run ${attempt}: ${validationError}`);
+        } else {
+            passed++;
+        }
+    }
+
+    const base = lastExecution!;
+    const score = `${passed}/3`;
+
+    if (passed === 3) {
+        return { ...base, id: definition.id, name: definition.name, status: 'passed', detail: `${score} — perfect.` };
+    }
+
+    if (passed >= 1) {
+        return { ...base, id: definition.id, name: definition.name, status: 'passed', detail: `${score} — ok. ${failDetails[0] ?? ''}`.trim() };
+    }
+
+    return { ...base, id: definition.id, name: definition.name, status: 'failed', detail: `${score} — failure. ${failDetails[0] ?? ''}`.trim() };
+}
+
+async function runToolCallingTestByVariant(config: TabConfig, definition: TestDefinition): Promise<TestRunResult> {
+    if (toolCallingVariant === 'parallel') return runParallelFunctionCallingTest(config, definition);
+    if (toolCallingVariant === 'advanced') return runAdvancedFunctionCallingTest(config, definition);
+    return runFunctionCallingTest(config, definition);
+}
+
 const TEST_DEFINITIONS: TestDefinition[] = [
     {
         id: 'basic-response',
@@ -573,18 +710,11 @@ const TEST_DEFINITIONS: TestDefinition[] = [
         run: config => runStructuredResponseTest(config, TEST_DEFINITIONS[5]),
     },
     {
-        id: 'function-calling',
-        name: 'Function Calling',
-        description: 'Validate that a function call is emitted with correct parameters.',
+        id: 'tool-calling',
+        name: 'Tool Calling',
+        description: 'Validate that function calls are emitted with correct parameters.',
         defaultEnabled: true,
-        run: config => runFunctionCallingTest(config, TEST_DEFINITIONS[6]),
-    },
-    {
-        id: 'parallel-function-calling',
-        name: 'Parallel Function Calling',
-        description: 'Validate that multiple tools are called in a single response.',
-        defaultEnabled: true,
-        run: config => runParallelFunctionCallingTest(config, TEST_DEFINITIONS[7]),
+        run: config => runToolCallingTestByVariant(config, TEST_DEFINITIONS[6]),
     },
 ];
 
@@ -621,6 +751,12 @@ function createSummary(states: DisplayTestState[]): TestSuiteSummary {
             .filter((value): value is number => typeof value === 'number' && Number.isFinite(value)),
     );
 
+    const tokensPerSecond = aggregateNumbers(
+        completedStates
+            .map(state => state.metrics?.tokensPerSecond)
+            .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0),
+    );
+
     const inputTokens = completedStates.reduce((sum, state) => sum + (state.metrics?.inputTokens || 0), 0);
     const outputTokens = completedStates.reduce((sum, state) => sum + (state.metrics?.outputTokens || 0), 0);
     const reasoningDetected = completedStates.some(state => state.hasReasoning === true);
@@ -629,6 +765,7 @@ function createSummary(states: DisplayTestState[]): TestSuiteSummary {
         connectionLatency,
         timeToFirstToken,
         totalTime,
+        tokensPerSecond,
         inputTokens,
         outputTokens,
         reasoningDetected,
@@ -680,7 +817,7 @@ function buildAggregateMetricBlock(label: string, aggregate: MetricAggregate | n
     );
 }
 
-function buildTokenMetricBlock(inputTokens: number, outputTokens: number): HTMLElement {
+function buildTokenMetricBlock(inputTokens: number, outputTokens: number, tps: MetricAggregate | null): HTMLElement {
     return el('div.test-metric-group',
         el('div.test-metric-group-label', 'Tokens used'),
         el('div.test-metric-subrow',
@@ -691,6 +828,15 @@ function buildTokenMetricBlock(inputTokens: number, outputTokens: number): HTMLE
             el('span.test-metric-subrow-label', 'Output'),
             el('span.test-metric-value', formatMetricNumber(outputTokens)),
         ),
+        ...(tps ? [
+            el('div.test-metric-subrow',
+                el('span.test-metric-subrow-label', 'Avg tok/s'),
+                el('span.test-metric-value',
+                    formatMetricNumber(Math.round(tps.average)),
+                    buildMetricUnit('tok/s'),
+                ),
+            ),
+        ] : []),
     );
 }
 
@@ -770,6 +916,29 @@ export function showTestingModal(config: TabConfig) {
         checkbox.checked = definition.defaultEnabled;
         checkboxMap.set(definition.id, checkbox);
 
+        if (definition.id === 'tool-calling') {
+            const select = el('select.test-variant-select', {
+                onChange: (e: Event) => {
+                    toolCallingVariant = (e.target as HTMLSelectElement).value as typeof toolCallingVariant;
+                },
+            },
+                el('option', { value: 'simple', ...(toolCallingVariant === 'simple' ? { selected: 'true' } : {}) }, 'Simple'),
+                el('option', { value: 'parallel', ...(toolCallingVariant === 'parallel' ? { selected: 'true' } : {}) }, 'Parallel'),
+                el('option', { value: 'advanced', ...(toolCallingVariant === 'advanced' ? { selected: 'true' } : {}) }, 'Advanced (3×)'),
+            ) as HTMLSelectElement;
+
+            return el('div.test-checkbox-variant-row',
+                el('label.test-checkbox-label',
+                    checkbox,
+                    el('span.test-checkbox-copy',
+                        el('span.test-checkbox-title', definition.name),
+                        el('span.test-checkbox-description', definition.description),
+                    ),
+                ),
+                select,
+            );
+        }
+
         return el('label.test-checkbox-label',
             checkbox,
             el('span.test-checkbox-copy',
@@ -804,14 +973,19 @@ export function showTestingModal(config: TabConfig) {
                         return;
                     }
 
-                    const states = TEST_DEFINITIONS.map(definition => ({
-                        id: definition.id,
-                        name: definition.name,
-                        description: definition.description,
-                        enabled: definition.fixed ? true : checkboxMap.get(definition.id)?.checked === true,
-                        status: definition.fixed || checkboxMap.get(definition.id)?.checked === true ? 'queued' as TestStatus : 'skipped' as TestStatus,
-                        detail: definition.fixed || checkboxMap.get(definition.id)?.checked === true ? '' : 'Disabled by user',
-                    }));
+                    const states = TEST_DEFINITIONS.map(definition => {
+                        const variantLabel = definition.id === 'tool-calling'
+                            ? ` (${toolCallingVariant})`
+                            : '';
+                        return {
+                            id: definition.id,
+                            name: definition.name + variantLabel,
+                            description: definition.description,
+                            enabled: definition.fixed ? true : checkboxMap.get(definition.id)?.checked === true,
+                            status: definition.fixed || checkboxMap.get(definition.id)?.checked === true ? 'queued' as TestStatus : 'skipped' as TestStatus,
+                            detail: definition.fixed || checkboxMap.get(definition.id)?.checked === true ? '' : 'Disabled by user',
+                        };
+                    });
                     showResultsModal(config, states);
                 },
             }, 'Run Tests'),
@@ -871,7 +1045,7 @@ function showResultsModal(config: TabConfig, states: DisplayTestState[]) {
             buildAggregateMetricBlock('Connection latency', summary.connectionLatency),
             buildAggregateMetricBlock('Time to first token', summary.timeToFirstToken),
             buildAggregateMetricBlock('Complete response time', summary.totalTime),
-            buildTokenMetricBlock(summary.inputTokens, summary.outputTokens),
+            buildTokenMetricBlock(summary.inputTokens, summary.outputTokens, summary.tokensPerSecond),
             buildReasoningMetricBlock(summary.reasoningDetected),
         );
 

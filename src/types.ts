@@ -34,7 +34,7 @@ export interface DebugInfo {
     updatedAt: number;
 }
 
-export type ReasoningEffort = 'disabled' | 'none' | 'low' | 'medium' | 'high';
+export type ReasoningEffort = 'disabled' | 'none' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export type AssistantMessagePart =
     | { type: 'content'; text: string }
@@ -60,6 +60,7 @@ export interface TabConfig {
     apiKey: string;
     systemPrompt: string;
     reasoningEffort: ReasoningEffort;
+    isDiffusion: boolean;
     temperature: number | null;
     topP: number | null;
     frequencyPenalty: number | null;
@@ -68,6 +69,7 @@ export interface TabConfig {
     stopSequences: string[] | null;
     tools: any[];
     structuredJson: Record<string, unknown> | null;
+    customJson: Record<string, unknown> | null;
     enabledParams: Record<string, boolean>;
 }
 
@@ -80,7 +82,7 @@ export interface Tab {
     debugInfo?: DebugInfo;
 }
 
-const REASONING_EFFORTS: ReasoningEffort[] = ['disabled', 'none', 'low', 'medium', 'high'];
+const REASONING_EFFORTS: ReasoningEffort[] = ['disabled', 'none', 'low', 'medium', 'high', 'xhigh'];
 
 function normalizeNullableNumber(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value)
@@ -122,6 +124,7 @@ export function normalizeTabConfig(config?: Partial<TabConfig> | null): TabConfi
         ...defaults,
         ...config,
         reasoningEffort: normalizeReasoningEffort(config?.reasoningEffort),
+        isDiffusion: typeof config?.isDiffusion === 'boolean' ? config.isDiffusion : false,
         temperature: normalizeNullableNumber(config?.temperature),
         topP: normalizeNullableNumber(config?.topP),
         frequencyPenalty: normalizeNullableNumber(config?.frequencyPenalty),
@@ -130,6 +133,7 @@ export function normalizeTabConfig(config?: Partial<TabConfig> | null): TabConfi
         stopSequences: normalizeStopSequences(config?.stopSequences),
         tools: Array.isArray(config?.tools) ? config.tools : defaults.tools,
         structuredJson: normalizeJsonObject(config?.structuredJson),
+        customJson: normalizeJsonObject(config?.customJson),
         enabledParams: {
             ...defaults.enabledParams,
             ...(config?.enabledParams ?? {}),
@@ -144,6 +148,7 @@ export function createDefaultConfig(): TabConfig {
         apiKey: '',
         systemPrompt: '',
         reasoningEffort: 'disabled',
+        isDiffusion: false,
         temperature: null,
         topP: null,
         frequencyPenalty: null,
@@ -152,6 +157,7 @@ export function createDefaultConfig(): TabConfig {
         stopSequences: null,
         tools: [],
         structuredJson: null,
+        customJson: null,
         enabledParams: {
             temperature: false,
             topP: false,

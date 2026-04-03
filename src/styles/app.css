@@ -432,6 +432,38 @@ select {
   margin: 8px 0;
   font-family: var(--mono);
   font-size: 13px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.code-block {
+  position: relative;
+}
+
+.code-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-muted);
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+
+.code-block:hover .code-copy-btn {
+  opacity: 1;
+}
+
+.code-copy-btn:hover {
+  color: var(--text);
+  background: var(--border);
 }
 
 .message-content code {
@@ -992,6 +1024,36 @@ select {
   gap: 10px;
 }
 
+.test-checkbox-variant-row {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+
+.test-checkbox-variant-row .test-checkbox-label {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding-right: 8px;
+}
+
+.test-variant-select {
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  padding: 0 10px;
+  cursor: pointer;
+  outline: none;
+  min-width: 120px;
+}
+
 .test-checkbox-label,
 .test-fixed-row {
   display: flex;
@@ -1448,6 +1510,42 @@ select {
   padding-top: 4px;
 }
 
+.settings-checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  cursor: pointer;
+}
+
+.settings-checkbox-row input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.settings-checkbox-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-checkbox-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.settings-checkbox-description {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.settings-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 4px 0 8px;
+}
+
 .sampling-panel {
   display: flex;
   flex-direction: column;
@@ -1465,8 +1563,8 @@ select {
   align-items: flex-start;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 18px;
-  background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg) 100%);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
 }
 
 .settings-note-icon {
@@ -1475,7 +1573,7 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: var(--radius);
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--accent);
@@ -1564,9 +1662,9 @@ select {
 
 .toggle-switch {
   position: relative;
-  width: 40px;
-  height: 24px;
-  border-radius: 999px;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius);
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   transition: background 0.15s ease, border-color 0.15s ease;
@@ -1578,9 +1676,9 @@ select {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   box-shadow: 0 1px 2px var(--shadow);
   transition: transform 0.15s ease;
@@ -1592,7 +1690,7 @@ select {
 }
 
 .toggle-input:checked + .toggle-switch::after {
-  transform: translateX(16px);
+  transform: translateX(14px);
 }
 
 .toggle-input:focus-visible + .toggle-switch {
@@ -1604,7 +1702,7 @@ select {
   min-width: 52px;
   padding: 4px 8px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   color: var(--text-muted);
   font-size: 12px;
@@ -1618,10 +1716,7 @@ select {
 
 @media (max-width: 640px) {
 
-  .settings-note-card,
-  .form-card {
-    border-radius: 14px;
-  }
+
 
   .control-header,
   .slider-header {

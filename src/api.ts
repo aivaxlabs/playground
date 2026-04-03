@@ -175,15 +175,15 @@ function aggregateModelResponse(events: any[]): string {
     }, null, 2);
 }
 
-function getStructuredResponseFormat(value: unknown): Record<string, unknown> | null {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return null;
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): void {
+    for (const [key, value] of Object.entries(source)) {
+        if (value && typeof value === 'object' && !Array.isArray(value) &&
+            target[key] && typeof target[key] === 'object' && !Array.isArray(target[key])) {
+            deepMerge(target[key] as Record<string, unknown>, value as Record<string, unknown>);
+        } else {
+            target[key] = value;
+        }
     }
-
-    const responseFormat = (value as Record<string, unknown>).response_format;
-    return responseFormat && typeof responseFormat === 'object' && !Array.isArray(responseFormat)
-        ? (responseFormat as Record<string, unknown>)
-        : null;
 }
 
 function cloneToolCalls(toolCalls: ToolCall[]): ToolCall[] {
@@ -334,8 +334,16 @@ export async function streamChat(tab: Tab, callbacks: StreamCallbacks): Promise<
     if (cfg.tools.length > 0) body.tools = cfg.tools;
     if (cfg.reasoningEffort && cfg.reasoningEffort !== 'disabled') body.reasoning_effort = cfg.reasoningEffort;
 
-    const responseFormat = getStructuredResponseFormat(cfg.structuredJson);
-    if (responseFormat) body.response_format = responseFormat;
+    if (cfg.structuredJson && typeof cfg.structuredJson === 'object' && !Array.isArray(cfg.structuredJson)) {
+        body.response_format = {
+            type: 'json_schema',
+            json_schema: { name: 'response_schema', schema: cfg.structuredJson },
+        };
+    }
+
+    if (cfg.customJson && typeof cfg.customJson === 'object' && !Array.isArray(cfg.customJson)) {
+        deepMerge(body, cfg.customJson);
+    }
 
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -509,7 +517,8 @@ export async function streamChat(tab: Tab, callbacks: StreamCallbacks): Promise<
 
     const totalTime = performance.now() - startTime;
     const ttft = firstTokenTime ? firstTokenTime - startTime : 0;
-    const tps = totalTime > 0 && outputTokens > 0 ? (outputTokens / (totalTime / 1000)) : 0;
+    const generationTime = totalTime - ttft;
+    const tps = generationTime > 0 && outputTokens > 0 ? (outputTokens / (generationTime / 1000)) : 0;
 
     callbacks.onDone({
         tokensPerSecond: Math.round(tps * 100) / 100,

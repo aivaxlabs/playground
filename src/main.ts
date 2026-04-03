@@ -43,54 +43,33 @@ const PREDEFINED_TOOLS = {
 
 const PREDEFINED_STRUCTURED_JSON = {
   answer: {
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        schema: {
-          type: 'object',
-          properties: {
-            answer: { type: 'string' },
-          },
-          required: ['answer'],
-          additionalProperties: false,
-        },
-      },
+    type: 'object',
+    properties: {
+      answer: { type: 'string' },
     },
+    required: ['answer'],
+    additionalProperties: false,
   },
   answerWithConfidence: {
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        schema: {
-          type: 'object',
-          properties: {
-            answer: { type: 'string' },
-            confidence: { type: 'number' },
-          },
-          required: ['answer', 'confidence'],
-          additionalProperties: false,
-        },
-      },
+    type: 'object',
+    properties: {
+      answer: { type: 'string' },
+      confidence: { type: 'number' },
     },
+    required: ['answer', 'confidence'],
+    additionalProperties: false,
   },
   answerWithCitations: {
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        schema: {
-          type: 'object',
-          properties: {
-            answer: { type: 'string' },
-            citations: {
-              type: 'array',
-              items: { type: 'string' },
-            },
-          },
-          required: ['answer', 'citations'],
-          additionalProperties: false,
-        },
+    type: 'object',
+    properties: {
+      answer: { type: 'string' },
+      citations: {
+        type: 'array',
+        items: { type: 'string' },
       },
     },
+    required: ['answer', 'citations'],
+    additionalProperties: false,
   },
 } as const;
 
@@ -172,6 +151,7 @@ let tabs: Tab[] = [];
 let activeTabId: string | null = null;
 let theme: 'light' | 'dark' = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 let pendingAttachments: Attachment[] = [];
+let pendingInputValue = '';
 let mediaRecorder: MediaRecorder | null = null;
 let recording = false;
 let pendingToolResponseFocusId: string | null = null;
@@ -336,21 +316,47 @@ function appendAssistantTextPart(msg: ChatMessage, type: 'content' | 'reasoning'
   if (!text) return;
 
   const parts = ensureAssistantParts(msg);
-  const lastPart = parts[parts.length - 1];
 
   if (type !== 'reasoning') {
     collapseLatestReasoningPart(msg);
   }
 
-  if (lastPart && lastPart.type === type) {
-    lastPart.text += text;
+  if (type === 'reasoning') {
+    // Look backwards past tool-call parts for an existing reasoning part to merge into.
+    // Stop if a content part is found — that means a new reasoning block is needed.
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (parts[i].type === 'content') break;
+      if (parts[i].type === 'reasoning') {
+        (parts[i] as { type: 'reasoning'; text: string }).text += text;
+        return;
+      }
+    }
   } else {
-    parts.push({ type, text });
+    const lastPart = parts[parts.length - 1];
+    if (lastPart && lastPart.type === type) {
+      (lastPart as { type: 'content'; text: string }).text += text;
+      msg.content += text;
+      return;
+    }
   }
 
+  parts.push({ type, text });
   if (type === 'content') {
     msg.content += text;
   }
+}
+
+function replaceAssistantContent(msg: ChatMessage, text: string) {
+  const parts = ensureAssistantParts(msg);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].type === 'content') {
+      (parts[i] as { type: 'content'; text: string }).text = text;
+      msg.content = text;
+      return;
+    }
+  }
+  parts.push({ type: 'content', text });
+  msg.content = text;
 }
 
 function createThinkTagParser(emit: (type: 'content' | 'reasoning', text: string) => void) {
@@ -517,6 +523,7 @@ function parseUrlParams() {
   const model = params.get(SHARED_URL_PARAM_KEYS.model) ?? params.get(LEGACY_SHARED_URL_PARAM_KEYS.model);
   const endpoint = params.get(SHARED_URL_PARAM_KEYS.endpoint) ?? params.get(LEGACY_SHARED_URL_PARAM_KEYS.endpoint);
   const apiKey = params.get(SHARED_URL_PARAM_KEYS.apiKey) ?? params.get(LEGACY_SHARED_URL_PARAM_KEYS.apiKey);
+  const diffusion = params.get('diffusion');
 
   if (model || endpoint || apiKey) {
     const t = createTabWithInitialConfig({
@@ -524,6 +531,7 @@ function parseUrlParams() {
       endpoint: endpoint ?? undefined,
       apiKey: apiKey ?? undefined,
     });
+    if (diffusion === 'true') t.config.isDiffusion = true;
     tabs.push(t);
     activeTabId = t.id;
     window.history.replaceState({}, '', window.location.pathname);
@@ -1087,17 +1095,44 @@ function tryFormatAssistantJson(text: string): string | null {
 function renderAssistantContentPart(text: string): HTMLElement {
   const formattedJson = tryFormatAssistantJson(text);
   if (formattedJson) {
-    return el('div.message-bubble.assistant-bubble.assistant-content-block',
+    const bubble = el('div.message-bubble.assistant-bubble.assistant-content-block',
       el('div.message-content',
         el('pre', el('code', formattedJson)),
       ),
     );
+    addCodeCopyButtons(bubble);
+    return bubble;
   }
 
   const contentEl = el('div.message-content');
   contentEl.innerHTML = renderMarkdown(text);
+  addCodeCopyButtons(contentEl);
 
   return el('div.message-bubble.assistant-bubble.assistant-content-block', contentEl);
+}
+
+function addCodeCopyButtons(container: HTMLElement) {
+  container.querySelectorAll('pre').forEach(pre => {
+    if (pre.parentElement?.classList.contains('code-block')) return;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'code-block';
+
+    const btn = document.createElement('button');
+    btn.className = 'code-copy-btn';
+    btn.title = 'Copy code';
+    btn.innerHTML = '<i class="ri-clipboard-line"></i>';
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(pre.textContent || '').then(() => {
+        btn.innerHTML = '<i class="ri-check-line"></i>';
+        setTimeout(() => { btn.innerHTML = '<i class="ri-clipboard-line"></i>'; }, 1500);
+      });
+    });
+
+    pre.parentNode!.insertBefore(wrapper, pre);
+    wrapper.appendChild(btn);
+    wrapper.appendChild(pre);
+  });
 }
 
 function renderAssistantReasoningPart(msg: ChatMessage, partIndex: number, text: string): HTMLElement {
@@ -1254,9 +1289,14 @@ function renderInput(tab: Tab): HTMLElement {
         if (val.trim() || pendingAttachments.length > 0) sendMessage(tab, val);
       }
     },
-    onInput: () => autoResize(),
+    onInput: (e: Event) => {
+      pendingInputValue = (e.target as HTMLTextAreaElement).value;
+      autoResize();
+    },
     onPaste: (e: ClipboardEvent) => handlePaste(e),
   }) as HTMLTextAreaElement;
+  textarea.value = pendingInputValue;
+  requestAnimationFrame(() => autoResize());
 
   const sendBtn = el('button.send-btn', {
     title: 'Send (Enter)',
@@ -1611,9 +1651,11 @@ function showAdvancedSettings(tab: Tab) {
     if (activeSettingsTab === 0) {
       const system = document.getElementById('cfg-system') as HTMLTextAreaElement | null;
       const reasoning = document.getElementById('cfg-reasoning') as HTMLSelectElement | null;
+      const diffusion = document.getElementById('cfg-diffusion') as HTMLInputElement | null;
 
       if (system) draftCfg.systemPrompt = system.value;
       if (reasoning) draftCfg.reasoningEffort = normalizeReasoningEffort(reasoning.value);
+      if (diffusion) draftCfg.isDiffusion = diffusion.checked;
       return;
     }
 
@@ -1661,15 +1703,21 @@ function showAdvancedSettings(tab: Tab) {
       return;
     }
 
-    const structuredJson = document.getElementById('cfg-structured-json') as HTMLTextAreaElement | null;
-    if (structuredJson) draftCfg.structuredJson = tryParseJSONObject(structuredJson.value);
+    if (activeSettingsTab === 3) {
+      const structuredJson = document.getElementById('cfg-structured-json') as HTMLTextAreaElement | null;
+      if (structuredJson) draftCfg.structuredJson = tryParseJSONObject(structuredJson.value);
+      return;
+    }
+
+    const customJson = document.getElementById('cfg-custom-json') as HTMLTextAreaElement | null;
+    if (customJson) draftCfg.customJson = tryParseJSONObject(customJson.value);
   }
 
   function renderSettings() {
     removeOverlay();
     const cfg = draftCfg;
 
-    const tabBtns = ['Model', 'Sampling', 'Tools', 'Structured JSON'].map((name, i) =>
+    const tabBtns = ['Model', 'Sampling', 'Tools', 'Structured JSON', 'Custom JSON'].map((name, i) =>
       el(`button.settings-tab-btn${i === activeSettingsTab ? '.active' : ''}`, {
         onClick: () => {
           readSettingsIntoDraft();
@@ -1687,10 +1735,17 @@ function showAdvancedSettings(tab: Tab) {
           el('textarea.form-input.form-textarea', { id: 'cfg-system', rows: '5' }, cfg.systemPrompt)),
         formGroup('Reasoning Effort',
           el('select.form-input', { id: 'cfg-reasoning' },
-            ...['disabled', 'none', 'low', 'medium', 'high'].map(v =>
+            ...['disabled', 'none', 'low', 'medium', 'high', 'xhigh'].map(v =>
               el('option', { value: v, ...(v === cfg.reasoningEffort ? { selected: 'true' } : {}) }, v)
             ),
           )),
+        el('label.settings-checkbox-row',
+          el('input', { type: 'checkbox', id: 'cfg-diffusion', ...(cfg.isDiffusion ? { checked: 'true' } : {}) }),
+          el('span.settings-checkbox-copy',
+            el('span.settings-checkbox-title', 'Diffusion Model'),
+            el('span.settings-checkbox-description', 'Each chunk replaces the current content instead of appending to it.'),
+          ),
+        ),
       );
     } else if (activeSettingsTab === 1) {
       const ep = cfg.enabledParams || {};
@@ -1745,14 +1800,15 @@ function showAdvancedSettings(tab: Tab) {
           }, 'Math'),
         ),
       );
-    } else {
+    } else if (activeSettingsTab === 3) {
       content = el('div.settings-panel',
-        formGroup('Structured JSON',
+        formGroup('Output Schema',
           el('textarea.form-input.form-textarea', {
             id: 'cfg-structured-json',
-            rows: '16',
+            rows: '14',
             placeholder: STRUCTURED_JSON_PLACEHOLDER,
           }, cfg.structuredJson ? JSON.stringify(cfg.structuredJson, null, 2) : '')),
+        el('p.settings-hint', 'The schema is wrapped automatically into response_format.json_schema.schema.'),
         el('div.tool-presets',
           el('span', 'Presets: '),
           el('button.btn.btn-sm', {
@@ -1774,6 +1830,16 @@ function showAdvancedSettings(tab: Tab) {
             },
           }, 'Answer + Citations'),
         ),
+      );
+    } else {
+      content = el('div.settings-panel',
+        formGroup('Custom JSON',
+          el('textarea.form-input.form-textarea', {
+            id: 'cfg-custom-json',
+            rows: '16',
+            placeholder: '{\n  "custom_key": "value"\n}',
+          }, cfg.customJson ? JSON.stringify(cfg.customJson, null, 2) : '')),
+        el('p.settings-hint', 'Recursively merged into the request body. Child keys override existing values.'),
       );
     }
 
@@ -2007,6 +2073,7 @@ async function sendMessage(tab: Tab, content?: string, continueOnly?: boolean) {
     };
     tab.messages.push(userMsg);
     pendingAttachments = [];
+    pendingInputValue = '';
   }
 
   const assistantMsg: ChatMessage = {
@@ -2027,10 +2094,17 @@ async function sendMessage(tab: Tab, content?: string, continueOnly?: boolean) {
     appendAssistantTextPart(assistantMsg, type, text);
   });
 
+  let diffusionBuffer = '';
+
   const controller = await streamChat(tab, {
     onPart: (part) => {
       if (part.type === 'content') {
-        thinkParser.feed(part.text);
+        if (tab.config.isDiffusion) {
+          diffusionBuffer += part.text;
+          replaceAssistantContent(assistantMsg, diffusionBuffer);
+        } else {
+          thinkParser.feed(part.text);
+        }
       } else {
         appendAssistantTextPart(assistantMsg, part.type, part.text);
       }
