@@ -1435,17 +1435,25 @@ function toggleRecording() {
 
   navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
     const chunks: Blob[] = [];
-    mediaRecorder = new MediaRecorder(stream);
+    const candidates: { mime: string; ext: string }[] = [
+      { mime: 'audio/ogg;codecs=opus', ext: 'ogg' },
+      { mime: 'audio/ogg', ext: 'ogg' },
+      { mime: 'audio/mp4', ext: 'm4a' },
+      { mime: 'audio/webm;codecs=opus', ext: 'webm' },
+      { mime: 'audio/webm', ext: 'webm' },
+    ];
+    const chosen = candidates.find(c => MediaRecorder.isTypeSupported(c.mime)) ?? candidates[candidates.length - 1];
+    mediaRecorder = new MediaRecorder(stream, { mimeType: chosen.mime });
     mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
     mediaRecorder.onstop = () => {
       stream.getTracks().forEach(t => t.stop());
-      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const blob = new Blob(chunks, { type: chosen.mime });
       const reader = new FileReader();
       reader.onload = () => {
         pendingAttachments.push({
           type: 'audio',
-          name: 'voice-recording.webm',
-          mimeType: 'audio/webm',
+          name: `voice-recording.${chosen.ext}`,
+          mimeType: chosen.mime,
           dataUrl: reader.result as string,
         });
         render();
