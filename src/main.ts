@@ -5,6 +5,8 @@ import { saveState, loadState } from './storage';
 import { streamChat } from './api';
 import { renderMarkdown } from './markdown';
 import { showTestingModal } from './testing';
+import { renderArtifactsPage, cleanupArtifacts } from './artifacts';
+import type { ArtifactPageOptions } from './artifacts';
 import './styles/app.css';
 
 const SUGGESTIONS = [
@@ -147,9 +149,12 @@ const LIBRARY_ITEMS = Object.entries(LIBRARY_FILE_URLS)
   .filter((item): item is LibraryItem => item !== null)
   .sort((a, b) => a.name.localeCompare(b.name));
 
+type AppView = 'chat' | 'artifacts';
+
 let tabs: Tab[] = [];
 let activeTabId: string | null = null;
 let theme: 'light' | 'dark' = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+let currentView: AppView = (window.location.hash === '#artifacts') ? 'artifacts' : 'chat';
 let pendingAttachments: Attachment[] = [];
 let pendingInputValue = '';
 let mediaRecorder: MediaRecorder | null = null;
@@ -505,6 +510,15 @@ function init() {
     applyTheme();
   });
 
+  window.addEventListener('hashchange', () => {
+    const newView: AppView = window.location.hash === '#artifacts' ? 'artifacts' : 'chat';
+    if (newView !== currentView) {
+      if (currentView === 'artifacts') cleanupArtifacts();
+      currentView = newView;
+      render();
+    }
+  });
+
   parseUrlParams();
 
   if (tabs.length === 0) {
@@ -659,11 +673,37 @@ function focusPendingToolResponseEditor() {
   });
 }
 
+function switchView(view: AppView) {
+  if (view === currentView) return;
+  if (currentView === 'artifacts') cleanupArtifacts();
+  currentView = view;
+  window.location.hash = view === 'artifacts' ? '#artifacts' : '#chat';
+  render();
+}
+
 function renderApp(): HTMLElement {
   return el('div.app-container',
     renderTabStrip(),
-    renderContent(),
+    currentView === 'artifacts' ? renderArtifactsContent() : renderContent(),
   );
+}
+
+function renderArtifactsContent(): HTMLElement {
+  const tab = getActiveTab();
+  const cfg = tab?.config ?? createTab().config;
+  const opts: ArtifactPageOptions = {
+    configGetter: () => tab?.config ?? createTab().config,
+    renderCallback: () => render(),
+    model: cfg.model,
+    endpoint: cfg.endpoint,
+    reasoningEffort: cfg.reasoningEffort,
+    onReasoningChange(v) {
+      if (tab) { tab.config.reasoningEffort = v; persist(); }
+      render();
+    },
+    onSettingsClick() { if (tab) showModelSettings(tab); },
+  };
+  return renderArtifactsPage(opts);
 }
 
 // ── Tab Strip ──
@@ -703,6 +743,12 @@ function renderTabStrip(): HTMLElement {
       ),
     ),
     el('div.tab-strip-actions',
+      el('div.view-switcher',
+        el(`button.view-switcher-btn${currentView === 'chat' ? '.active' : ''}`,
+          { onClick: () => switchView('chat') }, el('i.ri-chat-3-line'), ' Chat'),
+        el(`button.view-switcher-btn${currentView === 'artifacts' ? '.active' : ''}`,
+          { onClick: () => switchView('artifacts') }, el('i.ri-magic-line'), ' Artifacts'),
+      ),
       el('button.tab-strip-btn', {
         title: 'Clear current chat',
         onClick: clearCurrentChat,
@@ -1600,6 +1646,57 @@ function showModelSettings(tab: Tab) {
         formGroup('API Key', el('input.form-input', { type: 'password', value: draftCfg.apiKey, id: 'cfg-apikey', placeholder: 'sk-...' })),
       ),
       el('div.modal-footer',
+        el('div.modal-footer-left',
+          el('button.btn', {
+            title: 'Copy config as JSON',
+            onClick: () => {
+              readDraftFromInputs();
+              navigator.clipboard.writeText(JSON.stringify({ model: draftCfg.model, endpoint: draftCfg.endpoint, apiKey: draftCfg.apiKey }, null, 2));
+            },
+          }, el('i.ri-file-copy-line'), ' Copy'),
+          el('button.btn', {
+            title: 'Import config from JSON',
+            onClick: () => {
+              readDraftFromInputs();
+              const importModal = el('div.modal.modal-sm',
+                el('div.modal-header',
+                  el('h3', 'Import Config'),
+                  el('button.modal-close', { onClick: renderModelSettings }, el('i.ri-close-line')),
+                ),
+                el('div.modal-body',
+                  el('textarea.form-input.import-json-textarea', {
+                    id: 'cfg-import-json',
+                    placeholder: '{"model": "...", "endpoint": "...", "apiKey": "..."}',
+                    rows: '6',
+                    spellcheck: 'false',
+                  }),
+                ),
+                el('div.modal-footer',
+                  el('button.btn.btn-primary', {
+                    onClick: () => {
+                      const textarea = document.getElementById('cfg-import-json') as HTMLTextAreaElement | null;
+                      const text = textarea?.value ?? '';
+                      try {
+                        const parsed = JSON.parse(text);
+                        if (parsed && typeof parsed === 'object') {
+                          if (typeof parsed.model === 'string') draftCfg.model = parsed.model;
+                          if (typeof parsed.endpoint === 'string') draftCfg.endpoint = parsed.endpoint;
+                          if (typeof parsed.apiKey === 'string') draftCfg.apiKey = parsed.apiKey;
+                          presetsOpen = false;
+                          renderModelSettings();
+                        }
+                      } catch {
+                        const ta = document.getElementById('cfg-import-json') as HTMLTextAreaElement | null;
+                        if (ta) ta.style.borderColor = 'red';
+                      }
+                    },
+                  }, 'Import'),
+                ),
+              );
+              showOverlay(importModal);
+            },
+          }, el('i.ri-download-line'), ' Import'),
+        ),
         el('button.btn.btn-primary', {
           onClick: () => {
             readDraftFromInputs();
