@@ -2086,6 +2086,19 @@ select {
   color: var(--text-muted);
 }
 
+.artifact-build-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .artifact-status-error {
   color: #e74c3c;
 }
@@ -2127,6 +2140,50 @@ select {
 .artifact-layout-btn.active {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.artifact-download-menu {
+  position: relative;
+}
+
+.artifact-download-menu summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.artifact-download-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.artifact-download-options {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 130px;
+  padding: 5px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-lg);
+}
+
+.artifact-download-option {
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.artifact-download-option:hover {
+  background: var(--bg-secondary);
 }
 
 .artifact-raw-panel,

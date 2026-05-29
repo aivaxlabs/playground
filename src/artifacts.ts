@@ -1,7 +1,7 @@
 import el from "@cypherpotato/el";
 import { streamChat } from './api';
 import { createTab } from './types';
-import type { ReasoningEffort, Tab, TabConfig } from './types';
+import type { MessageMetrics, ReasoningEffort, Tab, TabConfig } from './types';
 
 export interface ArtifactDefinition {
     id: string;
@@ -113,6 +113,10 @@ type ArtifactState = {
     elapsedSeconds: number;
     startTime: number | null;
     outputTokens: number | null;
+    tokensPerSecond: number | null;
+    metrics: MessageMetrics | null;
+    runConfig: Pick<TabConfig, 'model' | 'endpoint' | 'reasoningEffort'> | null;
+    startedAt: string | null;
 };
 
 let state: ArtifactState = {
@@ -124,6 +128,10 @@ let state: ArtifactState = {
     elapsedSeconds: 0,
     startTime: null,
     outputTokens: null,
+    tokensPerSecond: null,
+    metrics: null,
+    runConfig: null,
+    startedAt: null,
 };
 
 type BuildLayout = 'split' | 'response' | 'preview';
@@ -162,6 +170,10 @@ function resetState() {
         elapsedSeconds: 0,
         startTime: null,
         outputTokens: null,
+        tokensPerSecond: null,
+        metrics: null,
+        runConfig: null,
+        startedAt: null,
     };
     iframeEl = null;
     rawTextEl = null;
@@ -224,6 +236,14 @@ async function startArtifact(artifact: ArtifactDefinition) {
     state.streamedContent = '';
     state.error = null;
     state.elapsedSeconds = 0;
+    state.tokensPerSecond = null;
+    state.metrics = null;
+    state.runConfig = {
+        model: config.model,
+        endpoint: config.endpoint,
+        reasoningEffort: config.reasoningEffort,
+    };
+    state.startedAt = new Date().toISOString();
     rerender?.();
     startTimer();
 
@@ -257,6 +277,8 @@ async function startArtifact(artifact: ArtifactDefinition) {
             state.phase = 'done';
             state.abortController = null;
             state.outputTokens = metrics.outputTokens ?? null;
+            state.tokensPerSecond = metrics.tokensPerSecond ?? null;
+            state.metrics = metrics;
             const html = extractHtmlFromStream(state.streamedContent);
             if (html) updateIframeContent(html);
             rerender?.();
@@ -282,6 +304,60 @@ function stopArtifact() {
     stopTimer();
     state.phase = 'done';
     rerender?.();
+}
+
+function downloadArtifact(kind: 'html' | 'json') {
+    const artifact = state.activeArtifact;
+    if (!artifact) return;
+
+    const html = extractHtmlFromStream(state.streamedContent);
+    const createdAt = new Date().toISOString();
+    const filenameSafeDate = createdAt.replace(/[:.]/g, '-');
+    const content = kind === 'html'
+        ? html ?? state.streamedContent
+        : JSON.stringify({
+            artifact: {
+                type: artifact.id,
+                id: artifact.id,
+                title: artifact.title,
+                description: artifact.description,
+            },
+            prompt: artifact.prompt,
+            output: {
+                html,
+                raw: state.streamedContent,
+            },
+            metadata: {
+                model: state.runConfig?.model ?? null,
+                endpoint: state.runConfig?.endpoint ?? null,
+                reasoningEffort: state.runConfig?.reasoningEffort ?? null,
+                phase: state.phase,
+                startedAt: state.startedAt,
+                exportedAt: createdAt,
+                elapsedSeconds: state.elapsedSeconds,
+                tokens: {
+                    input: state.metrics?.inputTokens ?? null,
+                    cached: state.metrics?.cachedTokens ?? null,
+                    output: state.metrics?.outputTokens ?? state.outputTokens,
+                },
+                timing: {
+                    totalMs: state.metrics?.totalTime ?? null,
+                    timeToFirstTokenMs: state.metrics?.timeToFirstToken ?? null,
+                    tokensPerSecond: state.metrics?.tokensPerSecond ?? state.tokensPerSecond,
+                },
+            },
+        }, null, 2);
+    const blob = new Blob([content], {
+        type: kind === 'html' ? 'text/html;charset=utf-8' : 'application/json;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${artifact.id}-${filenameSafeDate}.${kind}`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
 }
 
 function renderArtifactList(opts: ArtifactPageOptions): HTMLElement {
@@ -356,6 +432,9 @@ function renderBuildView(): HTMLElement {
     const statusText = state.phase === 'building' ? 'Building...'
         : state.phase === 'error' ? `Error: ${state.error}`
             : doneLabel;
+    const tokensPerSecondText = state.tokensPerSecond == null
+        ? '- tok/s'
+        : `${state.tokensPerSecond.toFixed(2)} tok/s`;
 
     const bodyEl = el('div.artifact-build-body') as HTMLElement;
     bodyEl.dataset.layout = buildLayout;
@@ -377,6 +456,13 @@ function renderBuildView(): HTMLElement {
             'data-layout': layout,
             onClick: () => setLayout(layout),
         }, el(`i.${icon}`));
+    const downloadOption = (kind: 'html' | 'json', label: string) =>
+        el('button.artifact-download-option', {
+            onClick(e: Event) {
+                downloadArtifact(kind);
+                (e.currentTarget as HTMLElement).closest('details')?.removeAttribute('open');
+            },
+        }, label);
 
     return el('div.artifact-build',
         el('div.artifact-build-header',
@@ -393,11 +479,22 @@ function renderBuildView(): HTMLElement {
                     statusText,
                     isBuilding ? el('span.artifact-timer', { id: 'artifact-timer' }, formatElapsed(state.elapsedSeconds)) : null,
                 ),
+                el('span.artifact-build-metric', { title: 'Tokens per second' },
+                    el('i.ri-speed-up-line'),
+                    ` ${tokensPerSecondText}`,
+                ),
             ),
             el('div.artifact-layout-btns',
                 layoutBtn('response', 'ri-file-text-line', 'Response only'),
                 layoutBtn('split', 'ri-layout-column-line', 'Side by side'),
                 layoutBtn('preview', 'ri-eye-line', 'Preview only'),
+            ),
+            el('details.artifact-download-menu',
+                el('summary.btn.btn-sm', el('i.ri-download-2-line'), ' Download as'),
+                el('div.artifact-download-options',
+                    downloadOption('html', 'HTML'),
+                    downloadOption('json', 'JSON'),
+                ),
             ),
             isBuilding
                 ? el('button.btn.btn-sm', { onClick: stopArtifact }, el('i.ri-stop-line'), ' Stop')
