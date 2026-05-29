@@ -47,6 +47,47 @@ const ARTIFACTS: ArtifactDefinition[] = [
         icon: 'ri-box-3-line',
         prompt: 'Create a 3D Minecraft-like voxel world using Three.js (import from CDN: https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js). Generate a small terrain with different block types (grass, dirt, stone, water). Implement first-person controls with WASD movement and mouse look. Allow placing and breaking blocks with left/right click. Include a simple crosshair and a basic block selector.',
     },
+    {
+        id: 'isometric-city-simulation',
+        title: 'Isometric City Simulation',
+        description: 'A dense procedural city-builder prototype with traffic, weather, disasters, and economy.',
+        icon: 'ri-building-4-line',
+        prompt: `Create a highly detailed isometric city simulation in a single self-contained HTML file. No external assets, libraries, CDNs, or backend.
+
+Requirements:
+
+- Render a large isometric city entirely using HTML5 Canvas or SVG.
+- Generate the city procedurally from a random seed.
+- Display the current seed in the HUD.
+- Add a "Regenerate City" button that creates a new coherent city layout with a new seed without reloading the page.
+- The city must contain roads, intersections, traffic lights, residential buildings, offices, parks, industrial zones, rivers, bridges, and public transportation.
+- At least 500 visible animated entities should exist simultaneously: cars, buses, trains, pedestrians, boats, birds, etc.
+- Vehicles must follow road networks realistically and obey traffic lights.
+- Pedestrians should walk on sidewalks, cross streets, and enter/leave buildings.
+- Include a dynamic day/night cycle with lighting changes, shadows, illuminated windows, and street lamps.
+- Add weather effects such as rain, fog, snow, and thunderstorms, changing automatically over time.
+- Include ambient city effects such as smoke from factories, moving clouds, birds, water animation, and construction cranes.
+- Buildings should have procedural variations so districts do not look repetitive.
+- Simulate a simple economy: population, jobs, traffic congestion, happiness, power consumption, and tax revenue updating in real time.
+- Include random disasters: fire, blackout, traffic accidents, storms, with visible emergency response vehicles.
+- Add a polished HUD showing city statistics, current weather, time of day, active disasters, and simulation state.
+- Allow smooth camera pan and zoom.
+- Maintain good performance and organization despite the simulation complexity.
+
+Visual quality requirements:
+
+- The result should resemble a modern city-builder game prototype, not a simple tech demo.
+- Prioritize visual richness, animation density, and the feeling of a living city.
+- Avoid placeholder graphics and repetitive patterns.
+- The simulation should feel alive even if the user never interacts with it.
+
+Implementation requirements:
+
+- Everything must be contained in a single HTML file.
+- No external resources.
+- Write clean, maintainable code with clear separation between rendering, simulation, procedural generation, and entity systems.
+- The simulation must start automatically when the page loads.`,
+    },
 ];
 
 const SYSTEM_PROMPT = `You are a creative coding assistant. The user will ask you to build something visual or interactive.
