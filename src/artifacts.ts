@@ -471,6 +471,7 @@ function renderBuildView(): HTMLElement {
     const tokensPerSecondText = state.tokensPerSecond == null
         ? '- tok/s'
         : `${state.tokensPerSecond.toFixed(2)} tok/s`;
+    const hasArtifactHtml = html !== null;
 
     const bodyEl = el('div.artifact-build-body') as HTMLElement;
     bodyEl.dataset.layout = buildLayout;
@@ -534,7 +535,15 @@ function renderBuildView(): HTMLElement {
             ),
             isBuilding
                 ? el('button.btn.btn-sm', { onClick: stopArtifact }, el('i.ri-stop-line'), ' Stop')
-                : el('button.btn.btn-sm', { onClick: () => startArtifact(artifact) }, el('i.ri-refresh-line'), ' Retry'),
+                : el('div.artifact-build-actions',
+                    el('button.btn.btn-sm', {
+                        ...(hasArtifactHtml ? {} : { disabled: 'true' }),
+                        onClick: () => {
+                            if (html) updateIframeContent(html);
+                        },
+                    }, el('i.ri-restart-line'), ' Reload Artifact'),
+                    el('button.btn.btn-sm', { onClick: () => startArtifact(artifact) }, el('i.ri-refresh-line'), ' Retry'),
+                ),
         ),
         bodyEl,
     );

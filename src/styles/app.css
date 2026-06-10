@@ -2132,6 +2132,13 @@ select {
   margin-right: 8px;
 }
 
+.artifact-build-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .artifact-layout-btn {
   padding: 4px 7px;
   color: var(--text-muted);
