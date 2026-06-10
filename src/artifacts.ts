@@ -48,6 +48,42 @@ const ARTIFACTS: ArtifactDefinition[] = [
         prompt: 'Create a 3D Minecraft-like voxel world using Three.js (import from CDN: https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js). Generate a small terrain with different block types (grass, dirt, stone, water). Implement first-person controls with WASD movement and mouse look. Allow placing and breaking blocks with left/right click. Include a simple crosshair and a basic block selector.',
     },
     {
+        id: 'voxel-mini-world',
+        title: 'Voxel Mini World',
+        description: 'An isometric voxel scene with trees, grass, animals, TNT, planting, spawning, and reset controls.',
+        icon: 'ri-landscape-line',
+        prompt: `Create a polished interactive 3D isometric voxel-art mini world in a single self-contained HTML file using Three.js (import from CDN: https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js).
+
+Build a charming block-based scene with a small grass island, layered terrain, trees, flowers, rocks, and several animated animals wandering around. The visual direction should feel like a cozy voxel diorama: crisp cubes, soft shadows, saturated natural colors, and an isometric camera view.
+
+Interaction requirements:
+
+- Add a compact toolbar with exactly three selectable world actions: TNT, Plant Tree, and Add Animal.
+- TNT mode: when the user clicks a grass block, place a voxel TNT block there. The TNT should visibly fuse for a short moment, then explode with particles, camera shake, and a circular blast that clears nearby small objects without destroying the entire world.
+- Plant Tree mode: when the user clicks a valid grass block, grow a small voxel tree there with a quick pop-in animation.
+- Add Animal mode: when selected, clicking the world should add a random animated animal, such as a sheep, cow, pig, chicken, or fox. The animal should join the wandering animation immediately.
+- Include a Reset World button that restores the currently viewed mini world to its initial generated state.
+
+Scene and animation requirements:
+
+- Animals must walk around autonomously, turn occasionally, bob subtly while moving, avoid leaving the island, and look visually different by species.
+- Trees should be built from voxel trunks and leafy block clusters.
+- The terrain must use individual voxel blocks, not one flat plane.
+- Use raycasting so clicks land on world blocks rather than generic screen positions.
+- Add ambient light, directional light, soft shadows, and a simple sky/background.
+- Keep the camera fixed in an isometric orbit-like view with optional gentle pan/zoom controls.
+- Provide clear selected-action state in the toolbar without using explanatory tutorial text.
+- The result should start automatically, run smoothly, and feel alive even before the user interacts with it.
+
+Implementation requirements:
+
+- Everything must be contained in a single HTML file.
+- All styles must be inline in a <style> tag.
+- All JavaScript must be inline in a <script type="module"> tag.
+- CDN import for Three.js is allowed; do not use any other external assets or files.
+- Organize the code clearly enough to be maintainable while keeping the experience complete.`,
+    },
+    {
         id: 'isometric-city-simulation',
         title: 'Isometric City Simulation',
         description: 'A dense procedural city-builder prototype with traffic, weather, disasters, and economy.',
